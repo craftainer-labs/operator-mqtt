@@ -22,6 +22,12 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the operator-mqtt itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- greeting_admin_role.yaml
-- greeting_editor_role.yaml
-- greeting_viewer_role.yaml
+- clustermqttbroker_admin_role.yaml
+- clustermqttbroker_editor_role.yaml
+- clustermqttbroker_viewer_role.yaml
+- mqttbroker_admin_role.yaml
+- mqttbroker_editor_role.yaml
+- mqttbroker_viewer_role.yaml
+- mqttuser_admin_role.yaml
+- mqttuser_editor_role.yaml
+- mqttuser_viewer_role.yaml

@@ -1,6 +1,10 @@
-// Package v1alpha1 contains API Schema definitions for the sample v1alpha1 API group.
+// Package v1alpha1 contains the API schema definitions of the
+// mqtt.craftainer.dev group, version v1alpha1: ClusterMqttBroker, MqttBroker
+// and MqttUser. The shared blocks (server, claim and status fields) come from
+// lib-operator-go's pkg/apis/common; docs/ and the lib-operator-go ADR 0002
+// say what each field means.
 // +kubebuilder:object:generate=true
-// +groupName=sample.craftainer.dev
+// +groupName=mqtt.craftainer.dev
 package v1alpha1
 
 import (
@@ -12,7 +16,7 @@ import (
 var (
 	// SchemeGroupVersion is group version used to register these objects.
 	// This name is used by applyconfiguration generators (e.g. controller-gen).
-	SchemeGroupVersion = schema.GroupVersion{Group: "sample.craftainer.dev", Version: "v1alpha1"}
+	SchemeGroupVersion = schema.GroupVersion{Group: "mqtt.craftainer.dev", Version: "v1alpha1"}
 
 	// GroupVersion is an alias for SchemeGroupVersion, for backward compatibility.
 	GroupVersion = SchemeGroupVersion

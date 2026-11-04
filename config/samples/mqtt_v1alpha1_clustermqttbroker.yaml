@@ -1,0 +1,11 @@
+apiVersion: mqtt.craftainer.dev/v1alpha1
+kind: ClusterMqttBroker
+metadata:
+  labels:
+    app.kubernetes.io/name: operator-mqtt
+    app.kubernetes.io/managed-by: kustomize
+  name: mosquitto
+spec:
+  host: mosquitto.messaging.svc.cluster.local
+  adminCredentialsSecretRef: {name: mosquitto-admin, namespace: craftainer-system}
+  allowedNamespaces: {from: All}

@@ -14,18 +14,18 @@ metadata:
     app.kubernetes.io/name: {{ include "operator-mqtt.name" . }}
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     app.kubernetes.io/instance: {{ .Release.Name }}
-  name: {{ include "operator-mqtt.resourceName" (dict "suffix" "greeting-admin-role" "context" $) }}
+  name: {{ include "operator-mqtt.resourceName" (dict "suffix" "mqttuser-admin-role" "context" $) }}
 rules:
 - apiGroups:
-  - sample.craftainer.dev
+  - mqtt.craftainer.dev
   resources:
-  - greetings
+  - mqttusers
   verbs:
   - '*'
 - apiGroups:
-  - sample.craftainer.dev
+  - mqtt.craftainer.dev
   resources:
-  - greetings/status
+  - mqttusers/status
   verbs:
   - get
 {{- end }}

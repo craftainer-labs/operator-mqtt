@@ -10,17 +10,37 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-sample-craftainer-dev-v1alpha1-greeting
+      path: /validate-mqtt-craftainer-dev-v1alpha1-clustermqttbroker
   failurePolicy: Fail
-  name: vgreeting-v1alpha1.kb.io
+  name: vclustermqttbroker-v1alpha1.kb.io
   rules:
   - apiGroups:
-    - sample.craftainer.dev
+    - mqtt.craftainer.dev
     apiVersions:
     - v1alpha1
     operations:
     - CREATE
     - UPDATE
     resources:
-    - greetings
+    - clustermqttbrokers
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-mqtt-craftainer-dev-v1alpha1-mqttbroker
+  failurePolicy: Fail
+  name: vmqttbroker-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - mqtt.craftainer.dev
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - mqttbrokers
   sideEffects: None

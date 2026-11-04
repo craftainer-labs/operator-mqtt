@@ -1,0 +1,13 @@
+apiVersion: mqtt.craftainer.dev/v1alpha1
+kind: MqttUser
+metadata:
+  labels:
+    app.kubernetes.io/name: operator-mqtt
+    app.kubernetes.io/managed-by: kustomize
+  name: sensor-gateway
+  namespace: team-a
+spec:
+  serverRef: {kind: ClusterMqttBroker, name: mosquitto}
+  acls:
+    - {topic: "sensors/+/telemetry", access: Publish}
+    - {topic: "commands/#", access: Subscribe}

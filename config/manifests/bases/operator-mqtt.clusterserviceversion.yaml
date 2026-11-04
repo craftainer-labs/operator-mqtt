@@ -22,15 +22,28 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: Greeting is the Schema for the greetings API.
-      displayName: Greeting
-      kind: Greeting
-      name: greetings.sample.craftainer.dev
+    - description: ClusterMqttBroker is a cluster-scoped MQTT broker that the namespaces in allowedNamespaces may claim from.
+      displayName: Cluster Mqtt Broker
+      kind: ClusterMqttBroker
+      name: clustermqttbrokers.mqtt.craftainer.dev
+      version: v1alpha1
+    - description: MqttBroker is an MQTT broker that only claims in its own namespace may use.
+      displayName: Mqtt Broker
+      kind: MqttBroker
+      name: mqttbrokers.mqtt.craftainer.dev
+      version: v1alpha1
+    - description: MqttUser is a user of an MQTT broker with ACLs under the tenant root, written to a binding Secret.
+      displayName: Mqtt User
+      kind: MqttUser
+      name: mqttusers.mqtt.craftainer.dev
       version: v1alpha1
   description: |-
-    A sample operator. Instances replace this text with what the operator does,
-    how to configure it and what it needs from the cluster.
-  displayName: Template K8s Operator
+    Provisions MQTT users and their topic ACLs on a Mosquitto broker through
+    Dynamic Security, from Kubernetes resources. A ClusterMqttBroker or
+    MqttBroker names the broker and its admin credentials; an MqttUser in a
+    team's namespace claims from it, with ACL patterns under the tenant's
+    topic root.
+  displayName: MQTT Operator
   install:
     spec:
       deployments: null
