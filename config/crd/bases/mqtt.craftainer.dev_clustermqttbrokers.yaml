@@ -269,6 +269,9 @@ spec:
                 - message: 'topicRoot must not contain the wildcards + or # or start
                     with $'
                   rule: '!self.contains(''+'') && !self.contains(''#'') && !self.startsWith(''$'')'
+                - message: topicRoot must not start with /, contain an empty topic
+                    level (//) or contain ..
+                  rule: '!self.startsWith(''/'') && !self.contains(''//'') && !self.contains(''..'')'
             required:
             - adminCredentialsSecretRef
             - allowedNamespaces

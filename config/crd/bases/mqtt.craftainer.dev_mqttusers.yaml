@@ -78,7 +78,8 @@ spec:
                     topic:
                       description: |-
                         topic is a topic pattern relative to the tenant root. It has no leading
-                        slash, does not start with $ and does not contain "..". The wildcards +
+                        slash, does not start with $, has no empty level, and contains neither ".."
+                        nor { or }. The wildcards +
                         and # take a whole topic level, and # only the last one.
                       maxLength: 256
                       minLength: 1
@@ -90,6 +91,11 @@ spec:
                         rule: '!self.startsWith(''$'')'
                       - message: topic must not contain ..
                         rule: '!self.contains(''..'')'
+                      - message: topic must not have an empty level (// or a trailing
+                          /)
+                        rule: '!self.contains(''//'') && !self.endsWith(''/'')'
+                      - message: topic must not contain { or }
+                        rule: '!self.contains(''{'') && !self.contains(''}'')'
                       - message: '# must be the whole last topic level'
                         rule: '!self.contains(''#'') || (self.indexOf(''#'') == size(self)
                           - 1 && (self == ''#'' || self.endsWith(''/#'')))'
