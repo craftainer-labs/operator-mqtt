@@ -29,18 +29,18 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	samplev1alpha1 "github.com/craftainer/template-k8s-operator/api/v1alpha1"
-	"github.com/craftainer/template-k8s-operator/internal/controller"
-	webhookv1alpha1 "github.com/craftainer/template-k8s-operator/internal/webhook/v1alpha1"
+	samplev1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
+	"github.com/craftainer-labs/operator-mqtt/internal/controller"
+	webhookv1alpha1 "github.com/craftainer-labs/operator-mqtt/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
 // LeaderElectionID names the Lease the replicas elect a leader through. An
 // instance renames it with the operator.
-const LeaderElectionID = "template-k8s-operator.craftainer.dev"
+const LeaderElectionID = "operator-mqtt.craftainer.dev"
 
 // EventRecorderName is the reporting controller of the operator's Events.
-const EventRecorderName = "template-k8s-operator"
+const EventRecorderName = "operator-mqtt"
 
 var scheme = newScheme()
 

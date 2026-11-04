@@ -19,7 +19,7 @@
 # (GHSA-69fq-xp46-6x23). Renovate bumps both together.
 set -euo pipefail
 
-trivy=aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+trivy=aquasec/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
 
 case "$(uname -m)" in
     aarch64 | arm64) host_arch=arm64 ;;
