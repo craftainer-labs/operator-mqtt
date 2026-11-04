@@ -22,7 +22,7 @@ const (
 const (
 	// DefaultPort is the broker port when spec.port is unset.
 	DefaultPort int32 = 8883
-	// DefaultControlTopic is the Mosquitto Dynamic Security control topic.
+	// DefaultControlTopic is the Dynamic Security control topic.
 	DefaultControlTopic = "$CONTROL/dynamic-security/v1"
 	// DefaultTopicRoot is the tenant topic root when spec.topicRoot is unset.
 	DefaultTopicRoot = "{namespace}/"

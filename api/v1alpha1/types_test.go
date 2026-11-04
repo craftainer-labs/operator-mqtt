@@ -42,7 +42,7 @@ func TestEndpointUsesTheDefaults(t *testing.T) {
 		config BrokerConfig
 		want   string
 	}{
-		{"defaults", BrokerConfig{Host: "mosquitto.messaging.svc"}, "mqtts://mosquitto.messaging.svc:8883"},
+		{"defaults", BrokerConfig{Host: "broker.messaging.svc"}, "mqtts://broker.messaging.svc:8883"},
 		{"websocket on a port", BrokerConfig{Host: "mqtt.example.com", Port: &port, Protocol: ProtocolWSS}, "wss://mqtt.example.com:443"},
 		{"IPv6", BrokerConfig{Host: "fd00::7"}, "mqtts://[fd00::7]:8883"},
 	} {
@@ -54,10 +54,10 @@ func TestMqttBrokerAccessors(t *testing.T) {
 	g := NewWithT(t)
 	b := &MqttBroker{Spec: MqttBrokerSpec{
 		ServerCommon: common.ServerCommon{ProxyURL: "http://proxy:3128"},
-		BrokerConfig: BrokerConfig{Host: "mosquitto"},
+		BrokerConfig: BrokerConfig{Host: "broker"},
 	}}
 	g.Expect(b.GetCommon().ProxyURL).To(Equal("http://proxy:3128"))
-	g.Expect(b.GetEndpoint()).To(Equal("mqtts://mosquitto:8883"))
+	g.Expect(b.GetEndpoint()).To(Equal("mqtts://broker:8883"))
 	g.Expect(b.GetAllowedNamespaces()).To(BeNil())
 }
 
@@ -65,11 +65,11 @@ func TestClusterMqttBrokerAccessors(t *testing.T) {
 	g := NewWithT(t)
 	b := &ClusterMqttBroker{Spec: ClusterMqttBrokerSpec{
 		ServerCommon:      common.ServerCommon{ProxyURL: "http://proxy:3128"},
-		BrokerConfig:      BrokerConfig{Host: "mosquitto"},
+		BrokerConfig:      BrokerConfig{Host: "broker"},
 		AllowedNamespaces: common.AllowedNamespaces{From: common.NamespacesAll},
 	}}
 	g.Expect(b.GetCommon().ProxyURL).To(Equal("http://proxy:3128"))
-	g.Expect(b.GetEndpoint()).To(Equal("mqtts://mosquitto:8883"))
+	g.Expect(b.GetEndpoint()).To(Equal("mqtts://broker:8883"))
 	g.Expect(b.GetAllowedNamespaces().From).To(Equal(common.NamespacesAll))
 }
 
@@ -80,13 +80,13 @@ func TestMqttUserAccessors(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sensor-gateway"},
 		Spec: MqttUserSpec{
 			ClaimCommon: common.ClaimCommon{
-				ServerRef:          common.ServerRef{Kind: "ClusterMqttBroker", Name: "mosquitto"},
+				ServerRef:          common.ServerRef{Kind: "ClusterMqttBroker", Name: "broker"},
 				ManagementPolicies: []common.ManagementPolicy{common.ManagementAll},
 			},
 			Credentials: common.Credentials{RotationPolicy: rotation},
 		},
 	}
-	g.Expect(u.GetServerRef()).To(Equal(common.ServerRef{Kind: "ClusterMqttBroker", Name: "mosquitto"}))
+	g.Expect(u.GetServerRef()).To(Equal(common.ServerRef{Kind: "ClusterMqttBroker", Name: "broker"}))
 	g.Expect(u.GetDeletionPolicy()).To(BeEmpty())
 	g.Expect(u.GetManagementPolicies()).To(Equal([]common.ManagementPolicy{common.ManagementAll}))
 

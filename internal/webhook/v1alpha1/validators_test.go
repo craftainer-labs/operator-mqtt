@@ -38,23 +38,23 @@ var brokerCases = []struct {
 	field             string // the field the error names; empty means valid
 	message           string // a substring of the error
 }{
-	{name: "valid", host: "mosquitto.messaging.svc.cluster.local"},
-	{name: "valid upper case", host: "Mosquitto.Example.COM"},
-	{name: "valid fully qualified", host: "mosquitto.example.com."},
+	{name: "valid", host: "broker.messaging.svc.cluster.local"},
+	{name: "valid upper case", host: "Broker.Example.COM"},
+	{name: "valid fully qualified", host: "broker.example.com."},
 	{name: "valid IPv4", host: "10.0.0.7"},
 	{name: "valid IPv6", host: "fd00::7"},
-	{name: "valid with a proxy", host: "mosquitto", proxy: "socks5://proxy:1080"},
-	{name: "host with a scheme", host: "mqtts://mosquitto", field: "spec.host"},
-	{name: "host with a port", host: "mosquitto:8883", field: "spec.host"},
-	{name: "host with userinfo", host: "user:pass@mosquitto", field: "spec.host"},
+	{name: "valid with a proxy", host: "broker", proxy: "socks5://proxy:1080"},
+	{name: "host with a scheme", host: "mqtts://broker", field: "spec.host"},
+	{name: "host with a port", host: "broker:8883", field: "spec.host"},
+	{name: "host with userinfo", host: "user:pass@broker", field: "spec.host"},
 	{name: "empty host", host: "", field: "spec.host"},
 	{name: "host with an underscore", host: "my_broker", field: "spec.host"},
-	{name: "proxy with another scheme", host: "mosquitto", proxy: "ftp://proxy", field: "spec.proxyURL", message: "http, https or socks5"},
-	{name: "proxy without a host", host: "mosquitto", proxy: "http://", field: "spec.proxyURL", message: "http, https or socks5"},
-	{name: "malformed proxy", host: "mosquitto", proxy: "http://[::1", field: "spec.proxyURL", message: "http, https or socks5"},
-	{name: "proxy with a user", host: "mosquitto", proxy: "http://user@proxy:3128", field: "spec.proxyURL", message: "must not carry credentials"},
-	{name: "proxy with a password", host: "mosquitto", proxy: "socks5://user:hunter2@proxy:1080", field: "spec.proxyURL", message: "must not carry credentials"},
-	{name: "proxy with an empty userinfo", host: "mosquitto", proxy: "https://:@proxy:3128", field: "spec.proxyURL", message: "must not carry credentials"},
+	{name: "proxy with another scheme", host: "broker", proxy: "ftp://proxy", field: "spec.proxyURL", message: "http, https or socks5"},
+	{name: "proxy without a host", host: "broker", proxy: "http://", field: "spec.proxyURL", message: "http, https or socks5"},
+	{name: "malformed proxy", host: "broker", proxy: "http://[::1", field: "spec.proxyURL", message: "http, https or socks5"},
+	{name: "proxy with a user", host: "broker", proxy: "http://user@proxy:3128", field: "spec.proxyURL", message: "must not carry credentials"},
+	{name: "proxy with a password", host: "broker", proxy: "socks5://user:hunter2@proxy:1080", field: "spec.proxyURL", message: "must not carry credentials"},
+	{name: "proxy with an empty userinfo", host: "broker", proxy: "https://:@proxy:3128", field: "spec.proxyURL", message: "must not carry credentials"},
 }
 
 func expectField(g *WithT, err error, field, message string) {
@@ -123,7 +123,7 @@ func TestClusterMqttBrokerValidator(t *testing.T) {
 func TestBrokerErrorsDoNotEchoTheValues(t *testing.T) {
 	g := NewWithT(t)
 	_, err := (&MqttBrokerValidator{}).ValidateCreate(context.Background(),
-		mqttBroker("user:hunter2@mosquitto", "http://user:hunter2@proxy:3128"))
+		mqttBroker("user:hunter2@broker", "http://user:hunter2@proxy:3128"))
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).NotTo(ContainSubstring("hunter2"))
 	g.Expect(err.Error()).NotTo(ContainSubstring("proxy:3128"))

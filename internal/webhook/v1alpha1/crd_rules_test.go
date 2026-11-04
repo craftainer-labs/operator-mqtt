@@ -42,7 +42,7 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 				ServerCommon: common.ServerCommon{
 					AdminCredentialsSecretRef: common.AdminSecretRef{Name: "admin", Namespace: "craftainer-system"},
 				},
-				BrokerConfig:      mqttv1alpha1.BrokerConfig{Host: "mosquitto.messaging.svc"},
+				BrokerConfig:      mqttv1alpha1.BrokerConfig{Host: "broker.messaging.svc"},
 				AllowedNamespaces: common.AllowedNamespaces{From: common.NamespacesAll},
 			},
 		}
@@ -52,7 +52,7 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 			Spec: mqttv1alpha1.MqttBrokerSpec{
 				ServerCommon: common.ServerCommon{AdminCredentialsSecretRef: common.AdminSecretRef{Name: "admin"}},
-				BrokerConfig: mqttv1alpha1.BrokerConfig{Host: "mosquitto.team-a.svc"},
+				BrokerConfig: mqttv1alpha1.BrokerConfig{Host: "broker.team-a.svc"},
 			},
 		}
 	}
@@ -78,7 +78,7 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			Expect(got.Spec.Protocol).To(Equal(mqttv1alpha1.ProtocolMQTTS))
 			Expect(got.Spec.ControlTopic).To(Equal("$CONTROL/dynamic-security/v1"))
 			Expect(got.Spec.TopicRoot).To(Equal("{namespace}/"))
-			Expect(got.GetEndpoint()).To(Equal("mqtts://mosquitto.messaging.svc:8883"))
+			Expect(got.GetEndpoint()).To(Equal("mqtts://broker.messaging.svc:8883"))
 		})
 
 		It("requires the admin Secret's namespace", func() {
@@ -115,7 +115,7 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 		})
 
 		It("rejects a host that is not a bare host name", func() {
-			for _, host := range []string{"mqtts://mosquitto", "mosquitto:8883", "user:pw@mosquitto", "mosquitto/path", "bad host"} {
+			for _, host := range []string{"mqtts://broker", "broker:8883", "user:pw@broker", "broker/path", "bad host"} {
 				b := clusterBroker("bad-host")
 				b.Spec.Host = host
 				rejected(create(b), "spec.host")

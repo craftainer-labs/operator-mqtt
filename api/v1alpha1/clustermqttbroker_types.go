@@ -7,9 +7,9 @@ import (
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
 )
 
+// +kubebuilder:validation:XValidation:rule="has(self.adminCredentialsSecretRef.namespace) && self.adminCredentialsSecretRef.namespace != ''",message="adminCredentialsSecretRef.namespace is required on a cluster-scoped broker"
+
 // ClusterMqttBrokerSpec defines the desired state of ClusterMqttBroker.
-//
-// +kubebuilder:validation:XValidation:rule="has(self.adminCredentialsSecretRef.namespace) && self.adminCredentialsSecretRef.namespace != ”",message="adminCredentialsSecretRef.namespace is required on a cluster-scoped broker"
 type ClusterMqttBrokerSpec struct {
 	common.ServerCommon `json:",inline"`
 	BrokerConfig        `json:",inline"`
