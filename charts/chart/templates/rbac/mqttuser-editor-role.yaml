@@ -11,21 +11,27 @@ metadata:
 {{- end }}
   labels:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
-    app.kubernetes.io/name: {{ include "template-k8s-operator.name" . }}
+    app.kubernetes.io/name: {{ include "operator-mqtt.name" . }}
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     app.kubernetes.io/instance: {{ .Release.Name }}
-  name: {{ include "template-k8s-operator.resourceName" (dict "suffix" "greeting-admin-role" "context" $) }}
+  name: {{ include "operator-mqtt.resourceName" (dict "suffix" "mqttuser-editor-role" "context" $) }}
 rules:
 - apiGroups:
-  - sample.craftainer.dev
+  - mqtt.craftainer.dev
   resources:
-  - greetings
+  - mqttusers
   verbs:
-  - '*'
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
-  - sample.craftainer.dev
+  - mqtt.craftainer.dev
   resources:
-  - greetings/status
+  - mqttusers/status
   verbs:
   - get
 {{- end }}

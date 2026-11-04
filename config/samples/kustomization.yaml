@@ -1,4 +1,6 @@
 ## Append samples of your project ##
 resources:
-- sample_v1alpha1_greeting.yaml
+- mqtt_v1alpha1_clustermqttbroker.yaml
+- mqtt_v1alpha1_mqttbroker.yaml
+- mqtt_v1alpha1_mqttuser.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

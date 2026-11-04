@@ -1,0 +1,11 @@
+apiVersion: mqtt.craftainer.dev/v1alpha1
+kind: MqttBroker
+metadata:
+  labels:
+    app.kubernetes.io/name: operator-mqtt
+    app.kubernetes.io/managed-by: kustomize
+  name: team-broker
+  namespace: team-a
+spec:
+  host: mqtt.team-a.svc
+  adminCredentialsSecretRef: {name: team-broker-admin}

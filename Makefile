@@ -33,7 +33,7 @@ IMAGE_SMOKE_RUN_ARGS ?=
 IMAGE_SMOKE_TIMEOUT ?= 60
 
 # renovate: datasource=docker depName=anchore/syft
-SYFT_VERSION := v1.55.0
+SYFT_VERSION := v1.52.0
 
 # Pinned by tag and digest; Renovate updates both together. Apache-2.0. The
 # `-immutable` tag, not `vX.Y.Z`: quay.io rebuilds the plain tags daily and
