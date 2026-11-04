@@ -196,8 +196,8 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 		})
 
 		It("rejects a host that is not a host name in the webhook", func() {
-			b := broker("underscore")
-			b.Spec.Host = "my_broker"
+			b := broker("leading-hyphen")
+			b.Spec.Host = "-broker"
 			rejected(create(b), "must be a host name or an IP address")
 		})
 	})

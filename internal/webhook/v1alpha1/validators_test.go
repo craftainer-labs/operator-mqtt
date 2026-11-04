@@ -48,7 +48,7 @@ var brokerCases = []struct {
 	{name: "host with a port", host: "broker:8883", field: "spec.host"},
 	{name: "host with userinfo", host: "user:pass@broker", field: "spec.host"},
 	{name: "empty host", host: "", field: "spec.host"},
-	{name: "host with an underscore", host: "my_broker", field: "spec.host"},
+	{name: "host with a leading hyphen", host: "-broker", field: "spec.host"},
 	{name: "proxy with another scheme", host: "broker", proxy: "ftp://proxy", field: "spec.proxyURL", message: "http, https or socks5"},
 	{name: "proxy without a host", host: "broker", proxy: "http://", field: "spec.proxyURL", message: "http, https or socks5"},
 	{name: "malformed proxy", host: "broker", proxy: "http://[::1", field: "spec.proxyURL", message: "http, https or socks5"},
