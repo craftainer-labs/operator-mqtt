@@ -155,13 +155,14 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 				"tenants/+/":        "must not contain the wildcards",
 				"tenants/#/":        "must not contain the wildcards",
 				"$SYS/{namespace}/": "or start with $",
+				"shared/":           "must contain {namespace} on a cluster-scoped broker",
 			}
 			for root, msg := range bad {
 				b := clusterBroker("root")
 				b.Spec.TopicRoot = root
 				rejected(create(b), msg)
 			}
-			for _, root := range []string{"{namespace}/", "tenants/{namespace}/", "shared/"} {
+			for _, root := range []string{"{namespace}/", "tenants/{namespace}/"} {
 				b := clusterBroker("root")
 				b.Spec.TopicRoot = root
 				Expect(create(b)).To(Succeed())

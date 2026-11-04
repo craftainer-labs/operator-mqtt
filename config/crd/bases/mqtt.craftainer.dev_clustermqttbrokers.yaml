@@ -279,6 +279,9 @@ spec:
                 broker
               rule: has(self.adminCredentialsSecretRef.namespace) && self.adminCredentialsSecretRef.namespace
                 != ''
+            - message: topicRoot must contain {namespace} on a cluster-scoped broker,
+                so tenants' topic roots do not overlap
+              rule: '!has(self.topicRoot) || self.topicRoot.contains(''{namespace}'')'
           status:
             description: status defines the observed state of ClusterMqttBroker
             properties:

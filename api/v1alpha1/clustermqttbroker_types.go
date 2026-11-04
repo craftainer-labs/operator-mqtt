@@ -8,6 +8,7 @@ import (
 )
 
 // +kubebuilder:validation:XValidation:rule="has(self.adminCredentialsSecretRef.namespace) && self.adminCredentialsSecretRef.namespace != ''",message="adminCredentialsSecretRef.namespace is required on a cluster-scoped broker"
+// +kubebuilder:validation:XValidation:rule="!has(self.topicRoot) || self.topicRoot.contains('{namespace}')",message="topicRoot must contain {namespace} on a cluster-scoped broker, so tenants' topic roots do not overlap"
 
 // ClusterMqttBrokerSpec defines the desired state of ClusterMqttBroker.
 type ClusterMqttBrokerSpec struct {
