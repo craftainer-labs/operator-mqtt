@@ -64,8 +64,12 @@ type BrokerConfig struct {
 	ControlTopic string `json:"controlTopic,omitempty"`
 
 	// topicRoot is the template of the topic prefix every tenant's ACL patterns
-	// live under. The only placeholder is {namespace}; the template ends with a
-	// slash. The default is "{namespace}/".
+	// live under. The only placeholder is {namespace}. On a ClusterMqttBroker it
+	// must contain {namespace}, so tenants' roots do not overlap; on an MqttBroker it
+	// is optional. The default is "{namespace}/". It must end with a slash, must not
+	// start with a slash, and must not contain an empty level (two slashes in a
+	// row), "..", braces other than the placeholder, the MQTT wildcards plus sign
+	// and hash, or a leading dollar sign. It is mutable.
 	// +kubebuilder:default="{namespace}/"
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256

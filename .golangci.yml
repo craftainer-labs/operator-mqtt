@@ -21,6 +21,10 @@ linters:
     - revive
     - unconvert
   settings:
+    misspell:
+      # The Mosquitto broker's name, which misspell takes for a typo of "mosquito".
+      ignore-rules:
+        - mosquitto
     nolintlint:
       # A suppression must name its linter and say why.
       require-explanation: true
