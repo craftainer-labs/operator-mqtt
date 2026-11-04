@@ -54,6 +54,9 @@ var brokerCases = []struct {
 	{name: "malformed proxy", host: "broker", proxy: "http://[::1", field: "spec.proxyURL", message: "http, https or socks5"},
 	{name: "proxy with a user", host: "broker", proxy: "http://user@proxy:3128", field: "spec.proxyURL", message: "must not carry credentials"},
 	{name: "proxy with a password", host: "broker", proxy: "socks5://user:hunter2@proxy:1080", field: "spec.proxyURL", message: "must not carry credentials"},
+	{name: "valid proxy port bounds", host: "broker", proxy: "http://proxy:65535"},
+	{name: "proxy port too high", host: "broker", proxy: "http://proxy:65536", field: "spec.proxyURL", message: "port must be between 1 and 65535"},
+	{name: "proxy port zero", host: "broker", proxy: "http://proxy:0", field: "spec.proxyURL", message: "port must be between 1 and 65535"},
 	{name: "proxy with an empty userinfo", host: "broker", proxy: "https://:@proxy:3128", field: "spec.proxyURL", message: "must not carry credentials"},
 }
 
@@ -83,13 +86,15 @@ func TestMqttBrokerValidator(t *testing.T) {
 	}
 
 	g := NewWithT(t)
-	// An object being deleted is always admitted, so finalizer removal is
-	// never blocked.
+	// An object being deleted is admitted while its spec is unchanged, so
+	// finalizer removal is never blocked; a spec change is still validated.
 	deleting := mqttBroker("not a host", "ftp://bad")
 	now := metav1.Now()
 	deleting.DeletionTimestamp = &now
-	_, err := v.ValidateUpdate(ctx, mqttBroker("old", ""), deleting)
+	_, err := v.ValidateUpdate(ctx, mqttBroker("not a host", "ftp://bad"), deleting)
 	g.Expect(err).NotTo(HaveOccurred())
+	_, err = v.ValidateUpdate(ctx, mqttBroker("old", ""), deleting)
+	g.Expect(err).To(HaveOccurred())
 	_, err = v.ValidateDelete(ctx, mqttBroker("not a host", ""))
 	g.Expect(err).NotTo(HaveOccurred())
 }
@@ -113,8 +118,10 @@ func TestClusterMqttBrokerValidator(t *testing.T) {
 	deleting := clusterMqttBroker("not a host", "ftp://bad")
 	now := metav1.Now()
 	deleting.DeletionTimestamp = &now
-	_, err := v.ValidateUpdate(ctx, clusterMqttBroker("old", ""), deleting)
+	_, err := v.ValidateUpdate(ctx, clusterMqttBroker("not a host", "ftp://bad"), deleting)
 	g.Expect(err).NotTo(HaveOccurred())
+	_, err = v.ValidateUpdate(ctx, clusterMqttBroker("old", ""), deleting)
+	g.Expect(err).To(HaveOccurred())
 	_, err = v.ValidateDelete(ctx, clusterMqttBroker("not a host", ""))
 	g.Expect(err).NotTo(HaveOccurred())
 }

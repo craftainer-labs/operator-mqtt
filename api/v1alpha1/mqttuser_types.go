@@ -28,13 +28,16 @@ const (
 // topics of another namespace.
 type ACL struct {
 	// topic is a topic pattern relative to the tenant root. It has no leading
-	// slash, does not start with $ and does not contain "..". The wildcards +
+	// slash, does not start with $, has no empty level, and contains neither ".."
+	// nor { or }. The wildcards +
 	// and # take a whole topic level, and # only the last one.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
 	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/')",message="topic must not start with /"
 	// +kubebuilder:validation:XValidation:rule="!self.startsWith('$')",message="topic must not start with $"
 	// +kubebuilder:validation:XValidation:rule="!self.contains('..')",message="topic must not contain .."
+	// +kubebuilder:validation:XValidation:rule="!self.contains('//') && !self.endsWith('/')",message="topic must not have an empty level (// or a trailing /)"
+	// +kubebuilder:validation:XValidation:rule="!self.contains('{') && !self.contains('}')",message="topic must not contain { or }"
 	// +kubebuilder:validation:XValidation:rule="!self.contains('#') || (self.indexOf('#') == size(self) - 1 && (self == '#' || self.endsWith('/#')))",message="# must be the whole last topic level"
 	// +kubebuilder:validation:XValidation:rule="self.split('/').all(l, l == '+' || !l.contains('+'))",message="+ must be a whole topic level"
 	Topic string `json:"topic"`

@@ -155,6 +155,9 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 				"tenants/+/":        "must not contain the wildcards",
 				"tenants/#/":        "must not contain the wildcards",
 				"$SYS/{namespace}/": "or start with $",
+				"/{namespace}/":     "must not start with /",
+				"{namespace}//x/":   "empty topic level",
+				"../{namespace}/":   "contain ..",
 				"shared/":           "must contain {namespace} on a cluster-scoped broker",
 			}
 			for root, msg := range bad {
@@ -240,6 +243,10 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 				"$SYS/broker/#":          "topic must not start with $",
 				"a/../b":                 "topic must not contain ..",
 				"..":                     "topic must not contain ..",
+				"a//b":                   "empty level",
+				"a/":                     "empty level",
+				"{namespace}/#":          "must not contain { or }",
+				"a/}":                    "must not contain { or }",
 				"a/#/b":                  "# must be the whole last topic level",
 				"a#":                     "# must be the whole last topic level",
 				"a/b#":                   "# must be the whole last topic level",

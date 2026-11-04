@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -31,9 +32,10 @@ func (v *ClusterMqttBrokerValidator) ValidateCreate(_ context.Context, obj *mqtt
 }
 
 // ValidateUpdate implements admission.Validator. An object that is being
-// deleted is always admitted.
-func (v *ClusterMqttBrokerValidator) ValidateUpdate(_ context.Context, _, newObj *mqttv1alpha1.ClusterMqttBroker) (admission.Warnings, error) {
-	if !newObj.DeletionTimestamp.IsZero() {
+// deleted is admitted while its spec is unchanged, so finalizer and metadata
+// updates are never blocked; a spec change is still validated.
+func (v *ClusterMqttBrokerValidator) ValidateUpdate(_ context.Context, oldObj, newObj *mqttv1alpha1.ClusterMqttBroker) (admission.Warnings, error) {
+	if !newObj.DeletionTimestamp.IsZero() && equality.Semantic.DeepEqual(oldObj.Spec, newObj.Spec) {
 		return nil, nil
 	}
 	clustermqttbrokerlog.Info("validating update", "name", newObj.GetName())

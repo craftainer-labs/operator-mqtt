@@ -72,6 +72,7 @@ type BrokerConfig struct {
 	// +kubebuilder:validation:XValidation:rule="self.endsWith('/')",message="topicRoot must end with /"
 	// +kubebuilder:validation:XValidation:rule="!self.replace('{namespace}', '').contains('{') && !self.replace('{namespace}', '').contains('}')",message="topicRoot may only contain the placeholder {namespace}"
 	// +kubebuilder:validation:XValidation:rule="!self.contains('+') && !self.contains('#') && !self.startsWith('$')",message="topicRoot must not contain the wildcards + or # or start with $"
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.contains('//') && !self.contains('..')",message="topicRoot must not start with /, contain an empty topic level (//) or contain .."
 	// +optional
 	TopicRoot string `json:"topicRoot,omitempty"`
 }

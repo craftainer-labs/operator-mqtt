@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -60,6 +61,11 @@ func proxyProblem(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || !slices.Contains([]string{"http", "https", "socks5"}, u.Scheme) || u.Hostname() == "" {
 		return "must be an http, https or socks5 URL with a host"
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return "port must be between 1 and 65535"
+		}
 	}
 	if u.User != nil {
 		return "must not carry credentials (user:password@); proxy credentials are not supported"
