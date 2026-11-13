@@ -1,0 +1,136 @@
+# The operator's Dynamic Security client against a real Mosquitto (NO4b-1): the
+# version of the dev stack (NR4), pinned by digest, with TLS on (a CA and server
+# certificate generated in the job), the Dynamic Security plugin loaded and its
+# admin made with a password generated in the job, and the client verifying the
+# certificate chain and host name. The tests are test/integration (build tag
+# `integration`); the certificates, the admin password and the broker's
+# configuration come from the same files the devcontainer stack uses
+# (test/integration/).
+#
+# Instance-owned: listed in .github/template-sync-manifest.local.yml, so
+# template sync never replaces it. A step-started container rather than a
+# `services:` container, because a service container starts before the
+# checkout and so cannot be handed the generated certificates or the
+# configuration.
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # renovate: datasource=docker depName=eclipse-mosquitto
+  MOSQUITTO_IMAGE: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+  # The version scripts/develop.d/10-go.sh installs for the checks lane.
+  # renovate: datasource=github-releases depName=golangci/golangci-lint
+  GOLANGCI_LINT_VERSION: 2.15.0
+
+jobs:
+  mosquitto:
+    name: Mosquitto with TLS and Dynamic Security
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER_AMD64 || 'ubuntu-24.04' }}
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The checks lane lints with the default build tags, so test/integration
+      # (build tag `integration`) is only compiled and linted here. Same
+      # release, checksum-verified like scripts/develop.d/10-go.sh, and the
+      # repository's .golangci.yml.
+      - name: Install golangci-lint
+        run: |
+          set -euo pipefail
+          dir="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64"
+          base="https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}"
+          tmp="$RUNNER_TEMP/golangci-lint"
+          mkdir -p "$tmp"
+          curl -LsSf -o "$tmp/$dir.tar.gz" "$base/$dir.tar.gz"
+          curl -LsSf -o "$tmp/checksums.txt" "$base/golangci-lint-${GOLANGCI_LINT_VERSION}-checksums.txt"
+          (cd "$tmp" && awk -v f="$dir.tar.gz" '$2 == f' checksums.txt | sha256sum -c -)
+          tar -xzf "$tmp/$dir.tar.gz" -C "$tmp"
+          echo "$tmp/$dir" >> "$GITHUB_PATH"
+
+      - name: Lint the integration tests
+        run: golangci-lint run --build-tags integration ./test/integration/...
+
+      - name: Generate the CA, the server certificate and the admin password
+        run: |
+          set -euo pipefail
+          test/integration/gen-certs.sh "$RUNNER_TEMP/mosquitto-tls"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/mosquitto-tls/admin-password")"
+
+      # mosquitto_ctrl, from the image under test, writes the plugin's initial
+      # state (the admin and its role) into the volume the broker keeps it in.
+      - name: Initialise the Dynamic Security plugin
+        run: |
+          set -euo pipefail
+          docker volume create mosquitto-data
+          docker run --rm \
+            -v mosquitto-data:/mosquitto/data \
+            -v "$RUNNER_TEMP/mosquitto-tls:/tls:ro" \
+            -v "$PWD/test/integration:/it:ro" \
+            --entrypoint sh "$MOSQUITTO_IMAGE" \
+            /it/init-dynsec.sh /mosquitto/data/dynamic-security.json admin /tls/admin-password
+
+      - name: Start Mosquitto with TLS
+        run: |
+          set -euo pipefail
+          docker run -d --name mosquitto -p 127.0.0.1:8883:8883 \
+            -v mosquitto-data:/mosquitto/data \
+            -v "$RUNNER_TEMP/mosquitto-tls:/tls:ro" \
+            -v "$PWD/test/integration/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+            "$MOSQUITTO_IMAGE"
+          for _ in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Running}}' mosquitto)" != "true" ]; then
+              docker logs mosquitto
+              echo "Mosquitto exited" >&2
+              exit 1
+            fi
+            logs="$(docker logs mosquitto 2>&1)"
+            if grep -q "Opening ipv4 listen socket on port 8883" <<< "$logs"; then exit 0; fi
+            sleep 1
+          done
+          docker logs mosquitto
+          echo "Mosquitto did not open its listener" >&2
+          exit 1
+
+      - name: Run the integration tests
+        run: |
+          set -euo pipefail
+          export MQTT_ADDRESS=localhost:8883
+          export MQTT_CA_FILE="$RUNNER_TEMP/mosquitto-tls/ca.crt"
+          export MQTT_ADMIN_USERNAME=admin
+          export MQTT_ADMIN_PASSWORD_FILE="$RUNNER_TEMP/mosquitto-tls/admin-password"
+          go test -tags integration -race -count=1 -v -timeout 15m \
+            -coverpkg=./internal/dynsec/ -coverprofile="$RUNNER_TEMP/integration.cover" \
+            ./test/integration/...
+          go tool cover -func="$RUNNER_TEMP/integration.cover" | tail -n 1
+
+      - name: Show the broker log
+        if: failure()
+        run: docker logs mosquitto
+
+      - name: Remove the broker
+        if: always()
+        run: |
+          docker rm -f mosquitto
+          docker volume rm mosquitto-data

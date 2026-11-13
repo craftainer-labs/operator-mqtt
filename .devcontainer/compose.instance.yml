@@ -2,4 +2,81 @@
 # `include:` stack fragments and any extra `services.myapp` settings
 # (`env_file`, `environment`, `depends_on`) here, so `compose.yml` stays
 # template-owned.
-services: {}
+#
+# The Mosquitto the integration tests (`test/integration`, build tag
+# `integration`) run against: a real broker with TLS on (a CA and server
+# certificate generated at start by `mosquitto-tls-init`), the Dynamic Security
+# plugin loaded and its admin made by `mosquitto-dynsec-init` with a random
+# password, so the operator's verified connections and the plugin's answers are
+# exercised for real. The same scripts, configuration and image pin run in
+# `.github/workflows/integration.yml`. Run the tests from the devcontainer with
+#   go test -tags integration -count=1 ./test/integration/...
+# (the environment below points them at the broker).
+services:
+  myapp:
+    environment:
+      MQTT_ADDRESS: mosquitto:8883
+      MQTT_CA_FILE: /mosquitto-tls/ca.crt
+      MQTT_ADMIN_USERNAME: admin
+      MQTT_ADMIN_PASSWORD_FILE: /mosquitto-tls/admin-password
+    volumes:
+      - mosquitto-tls:/mosquitto-tls:ro
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  # Generates the CA, the server certificate (names: mosquitto, localhost,
+  # 127.0.0.1) and the admin password into the mosquitto-tls volume, once: a
+  # start keeps them while they stay valid, because a running mosquitto has
+  # loaded them and the plugin's state holds the password's hash.
+  mosquitto-tls-init:
+    # renovate: datasource=docker depName=alpine/openssl
+    image: alpine/openssl:3.5.9@sha256:6821afa2476e11be343f29275f2ca24291720ff0a7148bd131fd8e314ff26d9e
+    entrypoint: ["sh", "/it/gen-certs.sh", "/tls"]
+    volumes:
+      - ../test/integration:/it:ro
+      - mosquitto-tls:/tls
+    restart: "no"
+
+  # Writes the plugin's initial state (the admin and its role) into the data
+  # volume with mosquitto_ctrl, unless it is already there.
+  mosquitto-dynsec-init:
+    # renovate: datasource=docker depName=eclipse-mosquitto
+    image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+    entrypoint: ["sh", "/it/init-dynsec.sh", "/mosquitto/data/dynamic-security.json", "admin", "/tls/admin-password"]
+    volumes:
+      - ../test/integration:/it:ro
+      - mosquitto-tls:/tls:ro
+      - mosquitto-data:/mosquitto/data
+    depends_on:
+      mosquitto-tls-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  mosquitto:
+    # renovate: datasource=docker depName=eclipse-mosquitto
+    image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+    volumes:
+      - ../test/integration/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-tls:/tls:ro
+      - mosquitto-data:/mosquitto/data
+    depends_on:
+      mosquitto-dynsec-init:
+        condition: service_completed_successfully
+    # A login as the admin and one $SYS message: the broker is up, the
+    # certificate chain loads and the plugin has the admin. The image has
+    # mosquitto_sub and no curl.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mosquitto_sub -h localhost -p 8883 --cafile /tls/ca.crt
+          -u admin -P "$$(cat /tls/admin-password)"
+          -t '$$SYS/broker/uptime' -C 1 -W 10
+      interval: 5s
+      timeout: 15s
+      retries: 30
+
+volumes:
+  mosquitto-tls:
+  mosquitto-data:

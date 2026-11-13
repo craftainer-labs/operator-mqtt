@@ -1,0 +1,7 @@
+# This instance's own paths, in the `ignore` tier only (same format as
+# template-sync-manifest.yml): read by the completeness check, never by sync.
+ignore:
+  # The real-Mosquitto integration lane (NO4b-1): workflow and the files
+  # shared with the devcontainer stack.
+  - .github/workflows/integration.yml
+  - test/integration/

@@ -22,7 +22,14 @@
   `claude-config` volume's mount path (see "Do").
 - `compose.instance.yml` — instance-owned stub (`ignore` tier, never
   touched by sync): an instance's `include:` list and extra `services.myapp`
-  settings. See `docs/TEMPLATE.md`'s "Instance extension points".
+  settings. See `docs/TEMPLATE.md`'s "Instance extension points". This
+  instance puts its integration Mosquitto there (`mosquitto`, with the one-shot
+  `mosquitto-tls-init` that generates its CA, server certificate and admin
+  password into the `mosquitto-tls` volume and `mosquitto-dynsec-init` that
+  writes the Dynamic Security plugin's initial state, using
+  `../test/integration`'s scripts and `mosquitto.conf`) and the `MQTT_*`
+  variables of `myapp` that point the tests at it; adding or changing it needs
+  a devcontainer rebuild.
 
 ## Docker-in-Docker vs. the host's Docker
 

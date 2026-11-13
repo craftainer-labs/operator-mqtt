@@ -31,6 +31,41 @@ reach another namespace's topics. On a `ClusterMqttBroker` it must contain
 whole topic levels (`#` only last), and reject a leading `/`, `$`, empty levels,
 `..` and braces. The CRD descriptions list every rule.
 
+## Known limits
+
+What the broker client (`internal/dynsec`) does and does not do. The controller
+(`MqttUser`) lands in the next change and adds its own limits here.
+
+- **`mqtts` only.** The API also lists `protocol: wss` (MQTT over WebSocket),
+  but the client speaks MQTT v5 over TLS on a TCP socket only, so a broker
+  reached as `wss` is not supported yet. The paho library's WebSocket support
+  lives in its `autopaho` package, which the client does not use (see below).
+- **Dynamic Security of Mosquitto 2.0.22.** The commands and the answers are
+  those of the plugin at that version, checked against its source and, in the
+  integration lane, against the pinned image. A broker without the plugin, or a
+  control topic nobody answers on, is a timeout, not a specific error: the plugin
+  does not announce itself.
+- **A command's outcome after a timeout is unknown.** The plugin acknowledges
+  nothing but its answer, and QoS 0 answers can be lost; the client reports
+  `ErrTimeout` and the controller observes before it retries.
+- **Changing a rule or a password ends the sessions that hold it.** The plugin
+  disconnects a user when its password, its roles or the ACLs of its roles
+  change, so a revoked right takes effect at once, and a rotation touches only
+  the login whose password is replaced.
+- **Rotation uses two logins, `<name>-a` and `<name>-b`,** with one password
+  each and the same role, so the old password stays valid while the new one is
+  rolled out (NR4). Retiring a login disables it and ends its sessions.
+- **No per-user connection limit.** The plugin has none, so the API's
+  `maxConnections` cannot be enforced by the broker; see the controller's
+  limits when it lands.
+- **One connection per broker, kept and checked.** The client logs in once as
+  the plugin's admin and reuses the connection; a lost connection is reported as
+  `ErrUnavailable` and made again by the caller. It never reads `HTTP(S)_PROXY`.
+- **The admin's role must hold the control topic.** The plugin's own
+  `mosquitto_ctrl dynsec init` creates such an admin; a broker managed by hand
+  needs `publishClientSend`, `publishClientReceive` and `subscribePattern` on
+  `$CONTROL/dynamic-security/#` for it.
+
 ## Install
 
 The operator needs a Kubernetes cluster at 1.33 or newer and
@@ -59,6 +94,18 @@ make bundle-validate   # OLM bundle (operator-sdk) and catalog (opm)
 make operator-help # every operator target
 prek run --all-files --hook-stage manual   # all checks
 ```
+
+The broker client is also tested against a real Mosquitto with TLS and the
+Dynamic Security plugin (build tag `integration`, see
+[`test/integration`](test/integration/README.md)):
+
+```sh
+go test -tags integration -count=1 ./test/integration/...
+```
+
+The devcontainer starts that broker (`mosquitto` in
+`.devcontainer/compose.instance.yml`) and CI runs it in
+`.github/workflows/integration.yml`.
 
 ## Releases
 
