@@ -149,6 +149,11 @@ func (c *BrokerCache) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			c.mu.Lock()
+			for k := range c.entries {
+				c.retire(k)
+			}
+			c.mu.Unlock()
 			return nil
 		case <-ticks:
 			c.mu.Lock()

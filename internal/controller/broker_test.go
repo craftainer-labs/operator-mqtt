@@ -240,12 +240,18 @@ func TestBrokerCacheSweeper(t *testing.T) {
 	if c.Len() != 1 || b.(*memBroker).closed != 1 || held.(*memBroker).closed != 0 {
 		t.Errorf("sweep: len = %d, closed = %d, held closed = %d", c.Len(), b.(*memBroker).closed, held.(*memBroker).closed)
 	}
-	relHeld()
 	cancel()
 	if err := <-done; err != nil {
 		t.Error(err)
 	}
 	<-stopped
+	if c.Len() != 0 || held.(*memBroker).closed != 0 {
+		t.Errorf("shutdown: len = %d, held closed = %d (a leased connection stays open)", c.Len(), held.(*memBroker).closed)
+	}
+	relHeld()
+	if held.(*memBroker).closed != 1 {
+		t.Errorf("held closed = %d after its release", held.(*memBroker).closed)
+	}
 	if interval != 30*time.Second {
 		t.Errorf("interval = %v", interval)
 	}
