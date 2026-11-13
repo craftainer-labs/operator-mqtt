@@ -190,14 +190,6 @@ do not do.
 - **The same topic with Publish and Subscribe is refused by the webhook,**
   as one duplicate; use `PublishSubscribe`.
 
-## Follow-ups
-
-- **NOX-fin (question):** when a claim that issued a create is deleted and its
-  broker, or the broker's admin Secret, is already gone, the operator passes the
-  resolve error to the framework (`lifecycle.Options.ResolveErr`) with no
-  `External`. Confirm in lib-operator-go that this still releases the finalizer
-  (or defines what is shown), and align all operators on it.
-
 ## Install
 
 The operator needs a Kubernetes cluster at 1.33 or newer. Helm and OLM v1 need
@@ -217,8 +209,7 @@ helm install operator-mqtt oci://ghcr.io/craftainer-labs/charts/operator-mqtt \
 
 A released chart pins the manager image by digest. Values worth knowing (the
 schema, `charts/chart/values.schema.json`, rejects a misspelt enum or digest, a
-name in `manager.extraEnv` that the chart sets itself, and a security context
-that would leave the `restricted` profile):
+name in `manager.extraEnv` that the chart sets itself):
 
 | Value | Default | Meaning |
 | --- | --- | --- |
@@ -306,7 +297,9 @@ deleting a claim does:
   login with another marker, or none, is skipped and stays on the broker; it
   never blocks the deletion.
 - Delete the claims before the broker object: with the broker or its admin
-  Secret gone, the claim cannot be cleaned up on the broker (see "Follow-ups").
+  Secret gone, the claim cannot be cleaned up on the broker: its finalizer stays,
+  and it reports `Synced=False` with reason `ServerNotFound` (or
+  `ServerUnreachable`) until the broker object and its Secret are back.
 - Uninstalling the chart with `crd.keep=false`, or deleting a CRD, deletes every
   claim of that kind and so every user and role the operator made.
 

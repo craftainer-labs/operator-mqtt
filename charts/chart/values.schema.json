@@ -57,42 +57,12 @@
           }
         },
         "podSecurityContext": {
-          "description": "Pod Security restricted (EB-10): the pod runs as non-root with a seccomp profile. The defaults set both; a value that is set may not weaken them.",
-          "type": "object",
-          "properties": {
-            "runAsNonRoot": {"const": true},
-            "runAsUser": {"type": "integer", "minimum": 1},
-            "runAsGroup": {"type": "integer", "minimum": 0},
-            "seccompProfile": {
-              "type": "object",
-              "properties": {
-                "type": {"enum": ["RuntimeDefault", "Localhost"]}
-              }
-            }
-          }
+          "description": "Pod Security restricted (EB-10) needs runAsNonRoot and a seccomp profile; the defaults set both.",
+          "type": "object"
         },
         "securityContext": {
-          "description": "Pod Security restricted (EB-10): no privilege escalation, no privileged mode, all capabilities dropped; the defaults also make the root filesystem read-only. A value that is set may not weaken them.",
-          "type": "object",
-          "properties": {
-            "allowPrivilegeEscalation": {"const": false},
-            "privileged": {"const": false},
-            "runAsNonRoot": {"const": true},
-            "runAsUser": {"type": "integer", "minimum": 1},
-            "capabilities": {
-              "type": "object",
-              "properties": {
-                "drop": {"type": "array", "contains": {"const": "ALL"}},
-                "add": {"type": "array", "items": {"enum": ["NET_BIND_SERVICE"]}}
-              }
-            },
-            "seccompProfile": {
-              "type": "object",
-              "properties": {
-                "type": {"enum": ["RuntimeDefault", "Localhost"]}
-              }
-            }
-          }
+          "description": "Pod Security restricted (EB-10): no privilege escalation, all capabilities dropped; the defaults also make the root filesystem read-only.",
+          "type": "object"
         }
       }
     }

@@ -658,8 +658,12 @@ spec:
               printf %s "$out" | grep -q 'hello-from-e2e'
               # Subscribing outside the grant delivers nothing. The sensor does
               # hold a Subscribe grant on cmd/#, and not on secret/#. The absence
-              # is observed for a bounded window (-W).
-              out=$(mqs sensor-mqtt mosquitto_sub -v -W 4 -t "${root}secret/#" 2>/dev/null) || true
+              # is observed for a bounded window (-W), in one subscription that
+              # also asks for the granted data/#: its retained message must
+              # arrive in that window (the positive control), so a connection
+              # that failed cannot pass the check.
+              out=$(mqs sensor-mqtt mosquitto_sub -v -W 4 -t "${root}secret/#" -t "${root}data/#" 2>/dev/null) || true
+              printf %s "$out" | grep -q 'hello-from-e2e'
               if printf %s "$out" | grep -q 'auditor-secret'; then
                 echo "the sensor received a message outside its grant"
                 exit 1
@@ -859,7 +863,12 @@ spec:
               # The claim removed its own objects. Someone else now makes a role
               # and a login of the same names, without the claim's marker.
               dyn "{\"commands\":[{\"command\":\"getRole\",\"rolename\":\"${base}\"}]}" | grep -qi 'not found'
-              dyn "{\"commands\":[{\"command\":\"createRole\",\"rolename\":\"${base}\"},{\"command\":\"createClient\",\"username\":\"${base}-a\",\"password\":\"e2e-foreign\"}]}" | grep -qv '"error"'
+              out=$(dyn "{\"commands\":[{\"command\":\"createRole\",\"rolename\":\"${base}\"},{\"command\":\"createClient\",\"username\":\"${base}-a\",\"password\":\"e2e-foreign\"}]}")
+              printf %s "$out" | grep -q '"command":"createClient"'
+              if printf %s "$out" | grep -q '"error"'; then
+                echo "the foreign objects were not created: $out"
+                exit 1
+              fi
         - apply:
             resource:
               apiVersion: mqtt.craftainer.dev/v1alpha1
@@ -891,14 +900,9 @@ spec:
               base=$(cat "${TMPDIR:-/tmp}/e2e-ghost-base-$NAMESPACE")
               # The claim is gone, and the objects it did not make are still
               # there, unchanged.
-              if dyn getRole rolename "$base" | grep -qi 'not found'; then
-                echo "the foreign role was deleted"
-                exit 1
-              fi
-              if dyn getClient username "${base}-a" | grep -qi 'not found'; then
-                echo "the foreign login was deleted"
-                exit 1
-              fi
+              # Positive greps: an exec that failed cannot pass as "still there".
+              dyn getRole rolename "$base" | grep -q "\"rolename\":\"${base}\"" || { echo "the foreign role was deleted"; exit 1; }
+              dyn getClient username "${base}-a" | grep -q "\"username\":\"${base}-a\"" || { echo "the foreign login was deleted"; exit 1; }
               dyn deleteClient username "${base}-a" >/dev/null
               dyn deleteRole rolename "$base" >/dev/null
 
@@ -956,15 +960,10 @@ spec:
               base=$(cat "${TMPDIR:-/tmp}/e2e-claimed-base-$NAMESPACE")
               # The claim is gone; the objects with another claim's marker were
               # skipped, not deleted.
-              if dyn getRole rolename "$base" | grep -qi 'not found'; then
-                echo "the foreign role was deleted"
-                exit 1
-              fi
+              # Positive greps: an exec that failed cannot pass as "still there".
+              dyn getRole rolename "$base" | grep -q "\"rolename\":\"${base}\"" || { echo "the foreign role was deleted"; exit 1; }
               dyn getRole rolename "$base" | grep -q 'other/other/00000000'
-              if dyn getClient username "${base}-a" | grep -qi 'not found'; then
-                echo "the foreign login was deleted"
-                exit 1
-              fi
+              dyn getClient username "${base}-a" | grep -q "\"username\":\"${base}-a\"" || { echo "the foreign login was deleted"; exit 1; }
               dyn deleteClient username "${base}-a" >/dev/null
               dyn deleteRole rolename "$base" >/dev/null
 
