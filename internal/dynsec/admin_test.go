@@ -52,7 +52,7 @@ func TestConnectAndCommand(t *testing.T) {
 
 func TestConnectDefaultsAndCustomControlTopic(t *testing.T) {
 	cfg := Config{}.withDefaults()
-	if cfg.ControlTopic != DefaultControlTopic || cfg.Timeout != defaultTimeout || cfg.Dial == nil {
+	if cfg.ControlTopic != DefaultControlTopic || cfg.Timeout != defaultTimeout {
 		t.Errorf("defaults = %+v", cfg)
 	}
 	custom := Config{ControlTopic: "$CONTROL/x/v1", Timeout: time.Second, Dial: func(context.Context, string, string) (net.Conn, error) { return nil, nil }}.withDefaults()
@@ -114,6 +114,11 @@ func TestConnectInvalidInput(t *testing.T) {
 	cfg.CA = []byte("not a certificate")
 	if _, err := Connect(context.Background(), cfg); !errors.Is(err, ErrInvalid) {
 		t.Errorf("bad CA: %v", err)
+	}
+	cfg = fb.config()
+	cfg.Dial = nil
+	if _, err := Connect(context.Background(), cfg); !errors.Is(err, ErrInvalid) {
+		t.Errorf("no dialer: %v", err)
 	}
 	cfg = fb.config()
 	cfg.Address = "no-port"
@@ -197,6 +202,14 @@ func TestCommandFailures(t *testing.T) {
 		fb := newFakeBroker(t, behavior{puback: 0x87}, echo)
 		a := connect(t, fb)
 		if err := a.DeleteClient(context.Background(), "u"); !errors.Is(err, ErrAuth) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("publish refused for another reason", func(t *testing.T) {
+		fb := newFakeBroker(t, behavior{puback: 0x97}, echo)
+		a := connect(t, fb)
+		err := a.DeleteClient(context.Background(), "u")
+		if !errors.Is(err, ErrBroker) || errors.Is(err, ErrAuth) {
 			t.Fatalf("err = %v", err)
 		}
 	})

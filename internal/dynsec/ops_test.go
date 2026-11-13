@@ -105,8 +105,13 @@ func TestCreateClientRoleFailure(t *testing.T) {
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v", err)
 	}
-	if n := len(fb.Commands()); n != 2 {
-		t.Errorf("%d commands, want createClient and one addClientRole", n)
+	var got []string
+	for _, c := range fb.Commands() {
+		got = append(got, c["command"].(string))
+	}
+	// The login is deleted again, so a retry starts clean.
+	if want := []string{"createClient", "addClientRole", "deleteClient"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("commands = %v, want %v", got, want)
 	}
 }
 
@@ -269,14 +274,16 @@ func TestSyncRoleACLs(t *testing.T) {
 	if err := a.SyncRoleACLs(context.Background(), "r", want); err != nil {
 		t.Fatal(err)
 	}
+	// New rules first, then the changed one (removed and added in a row), the
+	// ones no longer wanted last.
 	wantCalls := []string{
-		"removeRoleACL publishClientReceive b/#",
-		"removeRoleACL publishClientSend old/#",
-		"removeRoleACL subscribeLiteral lit",
-		"addRoleACL publishClientReceive b/#",
 		"addRoleACL publishClientSend a/+",
 		"addRoleACL subscribePattern b/#",
 		"addRoleACL unsubscribePattern b/#",
+		"removeRoleACL publishClientReceive b/#",
+		"addRoleACL publishClientReceive b/#",
+		"removeRoleACL publishClientSend old/#",
+		"removeRoleACL subscribeLiteral lit",
 	}
 	if got := r.snapshot(); !reflect.DeepEqual(got, wantCalls) {
 		t.Errorf("calls =\n%q\nwant\n%q", got, wantCalls)
@@ -296,12 +303,23 @@ func TestSyncRoleACLsNothingToDo(t *testing.T) {
 }
 
 func TestSyncRoleACLsErrors(t *testing.T) {
-	for _, failOn := range []string{"removeRoleACL", "addRoleACL"} {
-		r := &aclRecorder{have: []map[string]any{rule("publishClientSend", "old")}, failOn: failOn}
+	changed := map[string]any{"acltype": "publishClientSend", "topic": "t", "priority": 0, "allow": false}
+	for _, tt := range []struct {
+		name   string
+		have   []map[string]any
+		want   []RoleACL
+		failOn string
+	}{
+		{"adding", []map[string]any{rule("publishClientSend", "old")}, ACLsFor("t", true, false), "addRoleACL"},
+		{"removing a changed rule", []map[string]any{changed}, ACLsFor("t", true, false), "removeRoleACL"},
+		{"adding a changed rule", []map[string]any{changed}, ACLsFor("t", true, false), "addRoleACL"},
+		{"removing an unwanted rule", []map[string]any{rule("publishClientSend", "old")}, nil, "removeRoleACL"},
+	} {
+		r := &aclRecorder{have: tt.have, failOn: tt.failOn}
 		fb := newFakeBroker(t, behavior{}, r.handle)
 		a := connect(t, fb)
-		if err := a.SyncRoleACLs(context.Background(), "r", ACLsFor("t", true, false)); !errors.Is(err, ErrBroker) {
-			t.Errorf("fail on %s: %v", failOn, err)
+		if err := a.SyncRoleACLs(context.Background(), "r", tt.want); !errors.Is(err, ErrBroker) {
+			t.Errorf("%s: %v", tt.name, err)
 		}
 	}
 	fb := newFakeBroker(t, behavior{}, func(cmd map[string]any) []map[string]any { return failReply(cmd, "Role not found") })

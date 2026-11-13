@@ -24,11 +24,13 @@ func TestParseMarkerForeignText(t *testing.T) {
 	if got := ParseMarker(""); got != (Marker{}) {
 		t.Errorf("empty: %+v", got)
 	}
-	// Not a marker: the claim is the text itself, which matches no claim
-	// <namespace>/<name>/<uid>. Unknown fields after the claim are ignored.
-	if got := ParseMarker("made by hand"); got.Claim != "made" || got.Active != "" {
-		t.Errorf("foreign: %+v", got)
+	// Not a marker: foreign, even when the text equals a claim string.
+	for _, text := range []string{"made by hand", "a/b/c", "a/b/c active=a"} {
+		if got := ParseMarker(text); got != (Marker{Foreign: true}) {
+			t.Errorf("foreign %q: %+v", text, got)
+		}
 	}
+	// Unknown fields after the claim are ignored.
 	if got := ParseMarker("craftainer.dev/claim=a/b/c future=1 active=a"); got != (Marker{Claim: "a/b/c", Active: "a"}) {
 		t.Errorf("unknown field: %+v", got)
 	}

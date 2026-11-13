@@ -158,37 +158,52 @@ func (a *Admin) RemoveRoleACL(ctx context.Context, role string, typ ACLType, top
 	return err
 }
 
-// SyncRoleACLs makes the role's rules exactly want. It removes what is not
-// wanted or differs, then adds what is missing, one rule at a time, because
+// SyncRoleACLs makes the role's rules exactly want, one rule at a time, because
 // modifyRole replaces the rules without disconnecting the sessions that were
-// admitted under the old ones, and a revoked rule has to take effect. A role
-// that already has them is left untouched and nobody is disconnected.
+// admitted under the old ones, and a revoked rule has to take effect. Each
+// add or remove disconnects the logins of the role, so a change of N rules
+// disconnects them up to N times; a role that already has the rules is left
+// untouched and nobody is disconnected. The order keeps a failure from leaving
+// the role with less than it had: new rules are added first, a rule whose
+// allow or priority changed is removed and added in a row, and rules that are
+// no longer wanted are removed last.
 func (a *Admin) SyncRoleACLs(ctx context.Context, role string, want []RoleACL) error {
 	info, err := a.GetRole(ctx, role)
 	if err != nil {
 		return err
 	}
 	have, wanted := indexACLs(info.ACLs), indexACLs(want)
-	var del, add []RoleACL
+	var add, change, del []RoleACL
+	for k, w := range wanted {
+		if h, ok := have[k]; !ok {
+			add = append(add, w)
+		} else if w != h {
+			change = append(change, w)
+		}
+	}
 	for k, h := range have {
-		if w, ok := wanted[k]; !ok || w != h {
+		if _, ok := wanted[k]; !ok {
 			del = append(del, h)
 		}
 	}
-	for k, w := range wanted {
-		if h, ok := have[k]; !ok || w != h {
-			add = append(add, w)
-		}
-	}
-	sortACLs(del)
 	sortACLs(add)
-	for _, d := range del {
-		if err := a.RemoveRoleACL(ctx, role, d.Type, d.Topic); err != nil {
+	sortACLs(change)
+	sortACLs(del)
+	for _, w := range add {
+		if err := a.AddRoleACL(ctx, role, w); err != nil {
 			return err
 		}
 	}
-	for _, w := range add {
+	for _, w := range change {
+		if err := a.RemoveRoleACL(ctx, role, w.Type, w.Topic); err != nil {
+			return err
+		}
 		if err := a.AddRoleACL(ctx, role, w); err != nil {
+			return err
+		}
+	}
+	for _, d := range del {
+		if err := a.RemoveRoleACL(ctx, role, d.Type, d.Topic); err != nil {
 			return err
 		}
 	}

@@ -63,9 +63,9 @@ type Config struct {
 	// ControlTopic is the plugin's control topic; empty means
 	// DefaultControlTopic.
 	ControlTopic string
-	// Dial connects to Address; nil means a plain net.Dialer, which the
-	// operator never uses (it passes the egress policy's dialer, an
-	// egress.DialFunc, which is assignable because this type is unnamed).
+	// Dial connects to Address and is required: the operator passes the egress
+	// policy's dialer (an egress.DialFunc, assignable because this type is
+	// unnamed), and there is no default that could dial around it.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// Timeout bounds the connect and every command; zero means ten seconds.
 	Timeout time.Duration
@@ -77,9 +77,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Timeout == 0 {
 		c.Timeout = defaultTimeout
-	}
-	if c.Dial == nil {
-		c.Dial = (&net.Dialer{}).DialContext
 	}
 	return c
 }
@@ -135,6 +132,9 @@ func roots(pem []byte) (*x509.CertPool, error) {
 // the response topic. A refused login or subscription is ErrAuth.
 func Connect(ctx context.Context, cfg Config) (*Admin, error) {
 	cfg = cfg.withDefaults()
+	if cfg.Dial == nil {
+		return nil, fmt.Errorf("%w: no dialer: every connection goes through the egress policy's", ErrInvalid)
+	}
 	pool, err := roots(cfg.CA)
 	if err != nil {
 		return nil, err
@@ -282,8 +282,10 @@ func (a *Admin) do(ctx context.Context, command string, fields map[string]any) (
 	// left to a timeout.
 	pr, err := a.cli.Publish(ctx, &paho.Publish{QoS: 1, Topic: a.request, Payload: payload})
 	switch {
-	case pr != nil && err != nil:
+	case pr != nil && err != nil && pr.ReasonCode == reasonNotAuthorized:
 		return nil, fmt.Errorf("%w: %s: publish refused: %w", ErrAuth, command, err)
+	case pr != nil && err != nil:
+		return nil, fmt.Errorf("%w: %s: publish refused (reason 0x%02x): %w", ErrBroker, command, pr.ReasonCode, err)
 	case !a.Alive():
 		return nil, fmt.Errorf("%w: %s: connection lost", ErrUnavailable, command)
 	case ctx.Err() != nil:

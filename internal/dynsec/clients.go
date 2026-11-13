@@ -28,8 +28,8 @@ type ClientInfo struct {
 // putting the login on the role's list, and the plugin disconnects the logins of
 // a role through that list, so a rule revoked later would not end their sessions
 // (found by the integration lane). ErrExists when the username is taken. If a
-// grant fails the login exists without it, and the error says so; the caller
-// observes before it retries.
+// grant fails the login is deleted again (best effort), so a retry starts clean
+// and no half-privileged login is left with a live password.
 func (a *Admin) CreateClient(ctx context.Context, spec ClientSpec) error {
 	_, err := a.do(ctx, "createClient", map[string]any{
 		"username":        spec.Username,
@@ -41,6 +41,7 @@ func (a *Admin) CreateClient(ctx context.Context, spec ClientSpec) error {
 	}
 	for _, r := range spec.Roles {
 		if err := a.AddClientRole(ctx, spec.Username, r); err != nil {
+			_ = a.DeleteClient(ctx, spec.Username)
 			return err
 		}
 	}

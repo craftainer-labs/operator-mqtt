@@ -295,5 +295,6 @@ func failReply(cmd map[string]any, msg string) []map[string]any {
 
 // config returns a Config that reaches the fake broker as its admin.
 func (fb *fakeBroker) config() Config {
-	return Config{Address: fb.Addr, CA: fb.CAPEM, Username: fakeUser, Password: fakePassword, Timeout: 2 * time.Second}
+	return Config{Address: fb.Addr, CA: fb.CAPEM, Username: fakeUser, Password: fakePassword, Timeout: 2 * time.Second,
+		Dial: (&net.Dialer{}).DialContext}
 }
