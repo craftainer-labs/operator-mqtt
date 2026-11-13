@@ -117,6 +117,18 @@ type backend struct {
 	// broker returns the logged-in connection to the broker, connecting on first
 	// use: a claim whose broker is not Ready never connects.
 	broker func(ctx context.Context) (Broker, error)
+	// leases are the releases of the connections broker handed out; release
+	// calls them. A reconcile is sequential, so no lock is needed.
+	leases []func()
+}
+
+// release gives back every connection the reconcile used. The cache closes a
+// connection it replaced meanwhile only now.
+func (b *backend) release() {
+	for _, l := range b.leases {
+		l()
+	}
+	b.leases = nil
 }
 
 // brokerObject is the broker a claim names, as much of it as the controller
@@ -170,8 +182,12 @@ func (c Config) backend(ctx context.Context, ns string, ref common.ServerRef) (*
 		b.notReady = ErrBrokerNotReady
 	}
 	b.broker = func(ctx context.Context) (Broker, error) {
-		br, err := c.Cache.Get(ctx, key, version, func(ctx context.Context) (Broker, error) { return c.Connect(ctx, cfg) })
-		return br, coarse(ctx, "connect to the broker", err)
+		br, release, err := c.Cache.Get(ctx, key, version, func(ctx context.Context) (Broker, error) { return c.Connect(ctx, cfg) })
+		if err != nil {
+			return nil, coarse(ctx, "connect to the broker", err)
+		}
+		b.leases = append(b.leases, release)
+		return br, nil
 	}
 	return b, nil
 }

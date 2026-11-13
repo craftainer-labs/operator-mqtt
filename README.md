@@ -175,23 +175,27 @@ do not do.
   broker spec is seen at once.
 - **ACL topics may use the plugin's `%c` and `%u` substitutions.** They stay
   under the tenant root, so they cannot reach another tenant's topics.
-- **One reconcile at a time by default.** The controller runs a single worker
-  unless `--max-concurrent-reconciles` is raised, so a broker that does not
-  answer holds up the other brokers' users for the connect timeout (ten
-  seconds).
-- **The connection cache is not reference-counted.** A reconcile that replaces
-  a broker's connection (a changed broker, a dead connection) closes the old one
-  even if another reconcile still uses it; with `--max-concurrent-reconciles`
-  above 1 that reconcile fails with a connection error and the next one repeats
-  the steps (they are observe-first). An idle connection is closed at the next
-  use of the cache, not by a timer, so the last connection to a broker that no
-  user reconciles any more stays open until the process restarts or another
-  broker is used.
+- **A broker that does not answer holds up other users for the connect timeout
+  (ten seconds).** The controller runs one worker unless
+  `--max-concurrent-reconciles` is raised, and the connection cache connects with
+  its lock held, so a raised value bounds the delay for reconciles that already
+  have a connection but not for a second broker that is being connected. The
+  cache is safe for concurrent reconciles: a connection that is replaced while a
+  reconcile uses it is closed when that reconcile ends, and a timer closes the
+  connections nobody has used for ten minutes.
 - **Two rotations within one grace period** reuse the login that the first one
   was still retiring, so its password changes then; the active login is never
   reset.
 - **The same topic with Publish and Subscribe is refused by the webhook,**
   as one duplicate; use `PublishSubscribe`.
+
+## Follow-ups
+
+- **NOX-fin (question):** when a claim that issued a create is deleted and its
+  broker, or the broker's admin Secret, is already gone, the operator passes the
+  resolve error to the framework (`lifecycle.Options.ResolveErr`) with no
+  `External`. Confirm in lib-operator-go that this still releases the finalizer
+  (or defines what is shown), and align all operators on it.
 
 ## Install
 

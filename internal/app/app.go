@@ -342,10 +342,12 @@ func setup(mgr ctrl.Manager, webhooks bool, cs controllerSettings) error {
 			setupStep{"mqtt user webhook", webhookv1alpha1.SetupMqttUserWebhookWithManager},
 		)
 	}
+	conns := controller.NewBrokerCache(brokerCacheIdle)
+	steps = append(steps, setupStep{"broker connection sweeper", func(mgr ctrl.Manager) error { return mgr.Add(conns) }})
 	cfg := controller.Config{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder(EventRecorderName),
 		ManagedBy: EventRecorderName, OperatorNamespace: cs.namespace, DefaultDeletionPolicy: cs.deletion,
-		Egress: cs.egress, Connect: controller.ConnectAdmin, Cache: controller.NewBrokerCache(brokerCacheIdle),
+		Egress: cs.egress, Connect: controller.ConnectAdmin, Cache: conns,
 		MaxConcurrentReconciles: cs.maxConcurrent,
 	}
 	steps = append(steps, setupStep{"MqttUser controller", (&controller.UserReconciler{Config: cfg}).SetupWithManager})

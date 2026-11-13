@@ -54,6 +54,9 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	be, err := r.backend(ctx, u.Namespace, u.Spec.ServerRef)
 	opts := r.options(err)
+	if be != nil {
+		defer be.release()
+	}
 	var ext lifecycle.External[mqttv1alpha1.MqttUserSpec, userState]
 	if err == nil {
 		opts.ServerHost = be.host
