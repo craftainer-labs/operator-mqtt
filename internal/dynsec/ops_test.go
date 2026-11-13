@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -326,5 +327,30 @@ func TestSyncRoleACLsErrors(t *testing.T) {
 	a := connect(t, fb)
 	if err := a.SyncRoleACLs(context.Background(), "r", nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing role: %v", err)
+	}
+}
+
+func TestEqualACLs(t *testing.T) {
+	a := ACLsFor("t/#", true, true)
+	b := append([]RoleACL(nil), a...)
+	slices.Reverse(b)
+	if !EqualACLs(a, b) || !EqualACLs(nil, nil) {
+		t.Error("the same rules in another order differ")
+	}
+	if !EqualACLs(a, append(b, b[0])) {
+		t.Error("a repeated rule counts")
+	}
+	changed := append([]RoleACL(nil), a...)
+	changed[0].Allow = !changed[0].Allow
+	if EqualACLs(a, changed) {
+		t.Error("a changed rule is equal")
+	}
+	if EqualACLs(a, a[:2]) {
+		t.Error("fewer rules are equal")
+	}
+	other := append([]RoleACL(nil), a...)
+	other[0].Topic = "x"
+	if EqualACLs(a, other) {
+		t.Error("another topic is equal")
 	}
 }

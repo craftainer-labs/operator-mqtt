@@ -14,6 +14,7 @@
 package dynsec
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -57,6 +58,12 @@ type Config struct {
 	// CA is the PEM bundle that signed the broker's certificate. Empty means
 	// the system roots.
 	CA []byte
+	// ServerName is the name the broker's certificate must be valid for; empty
+	// means the host of Address.
+	ServerName string
+	// MinTLS is the lowest TLS version accepted (a crypto/tls constant); zero
+	// means TLS 1.2, which is also the floor when a lower one is given.
+	MinTLS uint16
 	// Username and Password are the admin's login.
 	Username string
 	Password string
@@ -78,6 +85,7 @@ func (c Config) withDefaults() Config {
 	if c.Timeout == 0 {
 		c.Timeout = defaultTimeout
 	}
+	c.MinTLS = max(c.MinTLS, tls.VersionTLS12)
 	return c
 }
 
@@ -150,7 +158,7 @@ func Connect(ctx context.Context, cfg Config) (*Admin, error) {
 	if err != nil {
 		return nil, transport("dial", err)
 	}
-	tc := tls.Client(raw, &tls.Config{ServerName: host, RootCAs: pool, MinVersion: tls.VersionTLS12})
+	tc := tls.Client(raw, &tls.Config{ServerName: cmp.Or(cfg.ServerName, host), RootCAs: pool, MinVersion: cfg.MinTLS})
 	if err := tc.HandshakeContext(ctx); err != nil {
 		_ = raw.Close()
 		return nil, transport("tls", err)

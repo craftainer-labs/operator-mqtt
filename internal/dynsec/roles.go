@@ -72,6 +72,21 @@ func indexACLs(acls []RoleACL) map[aclKey]RoleACL {
 	return m
 }
 
+// EqualACLs reports whether two sets of rules are the same: the rules are
+// identified by type and topic, so the order and a repeated rule do not matter.
+func EqualACLs(a, b []RoleACL) bool {
+	ia, ib := indexACLs(a), indexACLs(b)
+	if len(ia) != len(ib) {
+		return false
+	}
+	for k, r := range ia {
+		if o, ok := ib[k]; !ok || o != r {
+			return false
+		}
+	}
+	return true
+}
+
 func sortACLs(acls []RoleACL) {
 	slices.SortFunc(acls, func(a, b RoleACL) int {
 		return cmp.Or(cmp.Compare(a.Type, b.Type), cmp.Compare(a.Topic, b.Topic))
