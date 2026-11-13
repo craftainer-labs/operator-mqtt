@@ -291,7 +291,9 @@ func TestBackendForgetsAnInvalidBroker(t *testing.T) {
 	if _, err := be.broker(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.patch(h.server, func() { h.server.Spec.TLS = &common.TLS{CABundle: &common.CABundle{SecretRef: &common.KeyReference{Name: "missing-ca"}}} })
+	h.patch(h.server, func() {
+		h.server.Spec.TLS = &common.TLS{CABundle: &common.CABundle{SecretRef: &common.KeyReference{Name: "missing-ca"}}}
+	})
 	if _, err := h.cfg.backend(ctx, h.ns, h.ref()); err == nil {
 		t.Fatal("a broker with a missing CA Secret was resolved")
 	}

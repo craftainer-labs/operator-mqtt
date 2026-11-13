@@ -5,27 +5,7 @@ metadata:
   annotations:
     {{- if .Values.certManager.enabled }}
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "operator-mqtt.resourceName" (dict "suffix" "serving-cert" "context" $) }}
-    - admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: {{ include "operator-mqtt.resourceName" (dict "suffix" "webhook-service" "context" $) }}
-      namespace: {{ .Release.Namespace }}
-      path: /validate-mqtt-craftainer-dev-v1alpha1-mqttuser
-  failurePolicy: Fail
-  name: vmqttuser-v1alpha1.kb.io
-  rules:
-  - apiGroups:
-    - mqtt.craftainer.dev
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - mqttusers
-  sideEffects: None
-{{- end }}
+    {{- end }}
   name: {{ include "operator-mqtt.resourceName" (dict "suffix" "validating-webhook-configuration" "context" $) }}
 webhooks:
 - admissionReviewVersions:
