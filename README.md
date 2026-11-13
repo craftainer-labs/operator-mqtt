@@ -175,9 +175,10 @@ do not do.
   broker spec is seen at once.
 - **ACL topics may use the plugin's `%c` and `%u` substitutions.** They stay
   under the tenant root, so they cannot reach another tenant's topics.
-- **One reconcile at a time.** The controller runs a single worker, so a
-  broker that does not answer holds up the other brokers' users for the connect
-  timeout (ten seconds).
+- **One reconcile at a time by default.** The controller runs a single worker
+  unless `--max-concurrent-reconciles` is raised, so a broker that does not
+  answer holds up the other brokers' users for the connect timeout (ten
+  seconds).
 
 ## Install
 
