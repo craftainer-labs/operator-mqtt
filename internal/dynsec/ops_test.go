@@ -29,14 +29,8 @@ func TestSimpleCommands(t *testing.T) {
 		want map[string]any
 	}{
 		{"createClient", func(a *Admin) error {
-			return a.CreateClient(ctx, ClientSpec{Username: "u-a", Password: "pw", TextDescription: "m", Roles: []string{"r1", "r2"}})
-		}, map[string]any{
-			"command": "createClient", "username": "u-a", "password": "pw", "textdescription": "m",
-			"roles": []any{map[string]any{"rolename": "r1"}, map[string]any{"rolename": "r2"}},
-		}},
-		{"createClient without roles", func(a *Admin) error {
-			return a.CreateClient(ctx, ClientSpec{Username: "u", Password: "pw"})
-		}, map[string]any{"command": "createClient", "username": "u", "password": "pw", "textdescription": "", "roles": []any{}}},
+			return a.CreateClient(ctx, ClientSpec{Username: "u-a", Password: "pw", TextDescription: "m"})
+		}, map[string]any{"command": "createClient", "username": "u-a", "password": "pw", "textdescription": "m"}},
 		{"deleteClient", func(a *Admin) error { return a.DeleteClient(ctx, "u") },
 			map[string]any{"command": "deleteClient", "username": "u"}},
 		{"setClientPassword", func(a *Admin) error { return a.SetClientPassword(ctx, "u", "pw2") },
@@ -76,6 +70,43 @@ func TestSimpleCommands(t *testing.T) {
 				t.Errorf("command = %#v\nwant      %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCreateClientGrantsRolesWithAddClientRole(t *testing.T) {
+	fb := newFakeBroker(t, behavior{}, echo)
+	a := connect(t, fb)
+	if err := a.CreateClient(context.Background(), ClientSpec{Username: "u", Password: "p", Roles: []string{"r1", "r2"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range fb.Commands() {
+		got = append(got, c["command"].(string))
+		if c["command"] == "createClient" {
+			if _, has := c["roles"]; has {
+				t.Error("createClient carries a roles array")
+			}
+		}
+	}
+	if want := []string{"createClient", "addClientRole", "addClientRole"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("commands = %v, want %v", got, want)
+	}
+}
+
+func TestCreateClientRoleFailure(t *testing.T) {
+	fb := newFakeBroker(t, behavior{}, func(cmd map[string]any) []map[string]any {
+		if cmd["command"] == "addClientRole" {
+			return failReply(cmd, "Role not found")
+		}
+		return okReply(cmd, nil)
+	})
+	a := connect(t, fb)
+	err := a.CreateClient(context.Background(), ClientSpec{Username: "u", Password: "p", Roles: []string{"r1", "r2"}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v", err)
+	}
+	if n := len(fb.Commands()); n != 2 {
+		t.Errorf("%d commands, want createClient and one addClientRole", n)
 	}
 }
 

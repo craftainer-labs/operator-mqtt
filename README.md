@@ -52,6 +52,12 @@ What the broker client (`internal/dynsec`) does and does not do. The controller
   disconnects a user when its password, its roles or the ACLs of its roles
   change, so a revoked right takes effect at once, and a rotation touches only
   the login whose password is replaced.
+- **Roles are granted with `addClientRole`, not at `createClient`.** In
+  Mosquitto 2.0.22 a role given in `createClient` is not linked back to the role,
+  so changing that role's ACLs would not end the login's open sessions. The
+  client creates the login and then grants each role, which means a failure
+  between the two leaves a login without its role (the controller observes before
+  it retries).
 - **Rotation uses two logins, `<name>-a` and `<name>-b`,** with one password
   each and the same role, so the old password stays valid while the new one is
   rolled out (NR4). Retiring a login disables it and ends its sessions.

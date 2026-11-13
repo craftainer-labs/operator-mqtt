@@ -22,23 +22,29 @@ type ClientInfo struct {
 	Roles           []string
 }
 
-func roleRefs(names []string) []map[string]any {
-	refs := make([]map[string]any, len(names))
-	for i, n := range names {
-		refs[i] = map[string]any{"rolename": n}
-	}
-	return refs
-}
-
-// CreateClient creates a login. ErrExists when the username is taken.
+// CreateClient creates a login and grants it the roles. The roles are granted
+// with addClientRole after the createClient, not with createClient's own roles
+// array: in Mosquitto 2.0.22 the array puts the role on the login without
+// putting the login on the role's list, and the plugin disconnects the logins of
+// a role through that list, so a rule revoked later would not end their sessions
+// (found by the integration lane). ErrExists when the username is taken. If a
+// grant fails the login exists without it, and the error says so; the caller
+// observes before it retries.
 func (a *Admin) CreateClient(ctx context.Context, spec ClientSpec) error {
 	_, err := a.do(ctx, "createClient", map[string]any{
 		"username":        spec.Username,
 		"password":        spec.Password,
 		"textdescription": spec.TextDescription,
-		"roles":           roleRefs(spec.Roles),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	for _, r := range spec.Roles {
+		if err := a.AddClientRole(ctx, spec.Username, r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetClient reads a login. ErrNotFound when there is none.

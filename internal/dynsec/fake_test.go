@@ -217,7 +217,7 @@ func (fb *fakeBroker) connect(c net.Conn, p *packets.Connect) bool {
 	props := &packets.Properties{}
 	if fb.b.noQoS1 {
 		zero := byte(0)
-		props.MaximumQoS = &zero
+		props.MaximumQOS = &zero
 	}
 	ack.Content = &packets.Connack{ReasonCode: code, Properties: props}
 	write(c, ack)
