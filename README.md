@@ -179,6 +179,19 @@ do not do.
   unless `--max-concurrent-reconciles` is raised, so a broker that does not
   answer holds up the other brokers' users for the connect timeout (ten
   seconds).
+- **The connection cache is not reference-counted.** A reconcile that replaces
+  a broker's connection (a changed broker, a dead connection) closes the old one
+  even if another reconcile still uses it; with `--max-concurrent-reconciles`
+  above 1 that reconcile fails with a connection error and the next one repeats
+  the steps (they are observe-first). An idle connection is closed at the next
+  use of the cache, not by a timer, so the last connection to a broker that no
+  user reconciles any more stays open until the process restarts or another
+  broker is used.
+- **Two rotations within one grace period** reuse the login that the first one
+  was still retiring, so its password changes then; the active login is never
+  reset.
+- **The same topic with Publish and Subscribe is refused by the webhook,**
+  as one duplicate; use `PublishSubscribe`.
 
 ## Install
 
