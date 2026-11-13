@@ -200,18 +200,127 @@ do not do.
 
 ## Install
 
-The operator needs a Kubernetes cluster at 1.33 or newer and
-[cert-manager](https://cert-manager.io/) for its webhook certificates. A release
-publishes three artifacts to the OCI registry (see "Releases" below):
+The operator needs a Kubernetes cluster at 1.33 or newer. Helm and OLM v1 need
+[cert-manager](https://cert-manager.io/) for the webhooks' serving certificate;
+OLM v0 issues its own, so it needs none. A release publishes the Helm chart, an
+OLM bundle, a file-based catalog and the distroless `nonroot` image to GHCR,
+signed and attested (`release-extras.yml`, see "Releases" below and
+`docs/TEMPLATE.md`).
 
-- a Helm chart, `helm install operator-mqtt oci://<registry>/<path>/operator-mqtt --version X.Y.Z -n operator-mqtt-system --create-namespace`;
-- an OLM bundle and a file-based catalog, installable with OLM v0 and OLM v1's
-  `ClusterExtension`;
-- the distroless `nonroot` image the chart and bundle run.
+### Helm
 
-The registry and path come from the repository's `OCI_REGISTRY` variable and
-the release workflow. From a checkout, `make deploy` installs the kustomize
-manifests of `config/default`.
+```sh
+helm install operator-mqtt oci://ghcr.io/craftainer-labs/charts/operator-mqtt \
+  --version X.Y.Z --namespace operator-mqtt-system --create-namespace \
+  --set egressMode=allow-private
+```
+
+A released chart pins the manager image by digest. Values worth knowing (the
+schema, `charts/chart/values.schema.json`, rejects a misspelt enum or digest, a
+name in `manager.extraEnv` that the chart sets itself, and a security context
+that would leave the `restricted` profile):
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `egressMode` | `strict` | `allow-private` is the usual choice when the broker is an in-cluster Service or lives on a private address |
+| `defaultDataDeletionPolicy` | `Retain` | validated only: `MqttUser` is a credential kind with no `deletionPolicy` (see "Backup and restore") |
+| `global.imageRegistry` | empty | pull the image from a mirror (air-gapped, EB-5) |
+| `manager.image.digest` | set when released | image by digest; wins over `tag` |
+| `manager.extraEnv` | `[]` | extra environment, rendered after the chart's own (not `POD_NAMESPACE`, `EGRESS_MODE` or `DEFAULT_DATA_DELETION_POLICY`: the chart sets them, and the schema rejects them here), e.g. `NO_PROXY` or `HTTPS_PROXY` for the Kubernetes API client, or `SSL_CERT_FILE` with a bundle mounted through `manager.extraVolumes` and `manager.extraVolumeMounts` |
+| `manager.podSecurityContext`, `manager.securityContext` | restricted | non-root, seccomp `RuntimeDefault`, no privilege escalation, all capabilities dropped, read-only root filesystem (EB-10); the e2e installs into a `restricted` namespace as an arbitrary UID |
+| `crd.keep` | `true` | keep the CRDs, and with them every claim, when the release is uninstalled |
+
+The operator makes no outbound call except to the Kubernetes API and to the
+brokers named by the broker kinds, and it sends no telemetry. A broker's proxy
+and CA bundle belong to the broker object (`spec.proxyURL`, `spec.tls.caBundle`),
+not to the chart.
+
+The CSV therefore declares `features.operators.openshift.io/proxy-aware: "false"`:
+the operator reads no `HTTP(S)_PROXY` (the broker connection takes its proxy from
+`spec.proxyURL`), and the in-cluster Kubernetes API client needs no proxy.
+`disconnected` is `"true"` and the fips, tls-profiles and token-auth features are
+`"false"`.
+
+### OLM
+
+`make bundle` writes the bundle from `config/manifests` (`make bundle-validate`
+checks it offline; `bundle/` is generated and not committed). It supports
+`AllNamespaces` only, pins the manager image by digest and lists it in
+`spec.relatedImages`. The released bundle and a single-bundle catalog are
+`ghcr.io/craftainer-labs/operator-mqtt-bundle` and `...-catalog`; add the catalog
+as a `CatalogSource` (OLM v0) or a `ClusterCatalog` (OLM v1) and subscribe or
+create a `ClusterExtension`.
+
+From a checkout, `make deploy` installs the kustomize manifests of
+`config/default`.
+
+## Backup and restore
+
+The operator holds no data of its own: everything it knows is in Kubernetes
+objects and in the broker's Dynamic Security configuration.
+
+| Kept in | What | Back it up with |
+| --- | --- | --- |
+| Kubernetes | the three kinds and their status (`status.externalName`, `status.externalId`, the rotation state), the binding Secrets (`servicebinding.io/mqtt`), the admin Secrets and CA bundles that brokers reference | your cluster backup (Velero, GitOps, etcd). Restore the brokers and their Secrets first, then the claims |
+| Mosquitto | the Dynamic Security configuration (the file named by `plugin_opt_config_file`, `dynamic-security.json`): the logins and their password hashes, the roles and their ACLs, groups, and the ownership markers in the text description of each role and login | Mosquitto's own tooling: a copy of that file taken while the broker runs (the plugin rewrites it on every change), and the broker's configuration and TLS material |
+
+The operator never copies or restores broker state, and it cannot read a
+password back: Mosquitto keeps only a hash. What it does on a restore:
+
+- **The ownership markers** are `craftainer.dev/claim=<namespace>/<name>/<uid>`
+  in the text description of the role `<base>` and of its logins `<base>-a` and
+  `<base>-b`; the role's also ends in `active=a` or `active=b`. `<base>` is in
+  the claim's `status.externalName`. The operator touches only objects whose
+  marker names the claim, UID included.
+- **Restoring claims into a cluster whose broker still has their objects:** a
+  restored claim has a new UID, so the marker names another claim. The claim
+  reports `Synced=False`, reason `NameCollision`, and nothing is changed (see
+  "Resolving a NameCollision"). To reproduce it, restore a `MqttUser` of the same
+  name and namespace over a broker that still holds its role. To re-adopt, either
+  delete the role and the logins (`mosquitto_ctrl dynsec deleteClient` and
+  `deleteRole`) and let the claim create them again, which issues a new
+  password and rewrites the binding Secret, or give the objects the new marker with
+  Dynamic Security's `modifyRole` and `modifyClient` commands (`textdescription`
+  set to `craftainer.dev/claim=<namespace>/<name>/<new uid>`, and the role's
+  ` active=<a|b>` kept). Check first that no other claim uses them.
+- **Restoring the broker's configuration from an older copy:** logins, roles
+  and markers come back as they were. A password rotated since the copy is lost,
+  while the binding Secret still holds it, and the operator does not notice
+  (it compares the login name, not the password). Rotate the claim
+  (`craftainer.dev/rotate`, or `rotationPolicy`) to issue a new password and
+  rewrite the binding Secret; consumers read the new Secret. A claim created
+  after the copy has no objects on the broker and is created again.
+- **Binding Secrets** are rewritten by the operator, so a restore of them is not
+  required. A missing Secret, or one that does not hold the active login, is
+  replaced through a rotation to the other login, with the grace period, not by
+  resetting the login in place.
+
+`deletionPolicy` does not apply to `MqttUser`: it is a credential kind and has no
+`deletionPolicy` (`DEFAULT_DATA_DELETION_POLICY` is only validated). What
+deleting a claim does:
+
+- A claim that never issued a create (`status.externalId` is not set, for example
+  a `NameCollision`) is released without contacting the broker.
+- Otherwise the operator removes the role and the logins that carry the claim's
+  marker, which also ends their sessions, and releases the finalizer. A role or
+  login with another marker, or none, is skipped and stays on the broker; it
+  never blocks the deletion.
+- Delete the claims before the broker object: with the broker or its admin
+  Secret gone, the claim cannot be cleaned up on the broker (see "Follow-ups").
+- Uninstalling the chart with `crd.keep=false`, or deleting a CRD, deletes every
+  claim of that kind and so every user and role the operator made.
+
+Connections, for the operator of the broker:
+
+- The operator keeps one logged-in connection per broker (the plugin's admin,
+  client id `operator-mqtt-...`) and reuses it between reconciles; a connection
+  is replaced when the broker object, its admin credentials, CA bundle or proxy
+  change. A changed admin password on the broker is noticed once the operator
+  reads the new Secret (at the next poll, ten minutes by default) or the
+  connection fails.
+- A timer checks every five minutes and closes a connection nobody has used for
+  ten minutes, so an idle broker sees the admin session disappear. A connection
+  that is no longer used can stay open for up to fifteen minutes.
 
 ## Development
 

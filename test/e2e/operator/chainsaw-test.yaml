@@ -1,6 +1,8 @@
 # Installs the Helm chart into a Pod Security `restricted` namespace, with the
 # manager running as an arbitrary UID, then exercises the mqtt.craftainer.dev API
-# end to end: the CRDs, their defaults and the webhooks. The steps run in order; the cluster is thrown away afterwards.
+# (CRDs, schema defaults and rules, webhooks) and each kind's create, ready and
+# delete path against a TLS Mosquitto with Dynamic Security that runs in the
+# cluster. The steps run in order; the cluster is thrown away afterwards.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -27,6 +29,9 @@ spec:
                 --set manager.image.tag="$E2E_IMAGE_TAG" \
                 --set manager.image.pullPolicy=Never \
                 --set manager.podSecurityContext.runAsUser=12345 \
+                --set egressMode=allow-private \
+                --set 'manager.extraEnv[0].name=NO_PROXY' \
+                --set 'manager.extraEnv[0].value=.svc\,.cluster.local' \
                 --wait --timeout 4m
         - assert:
             resource:
@@ -39,8 +44,10 @@ spec:
       cleanup:
         - script:
             content: helm uninstall operator-mqtt --namespace "$NAMESPACE" --ignore-not-found
+        - script:
+            content: rm -f "${TMPDIR:-/tmp}"/e2e-*-"$NAMESPACE"
 
-    - name: runs as an arbitrary UID with leader election
+    - name: runs as an arbitrary UID, restricted, with leader election
       try:
         - script:
             content: |
@@ -49,6 +56,16 @@ spec:
               test "$uid" = 12345
               ro=$(kubectl get pods -n "$NAMESPACE" -l control-plane=controller-manager -o jsonpath='{.items[0].spec.containers[0].securityContext.readOnlyRootFilesystem}')
               test "$ro" = true
+              # EB-10: restricted profile, all capabilities dropped, no escalation.
+              ctr='{.items[0].spec.containers[0].securityContext}'
+              sc=$(kubectl get pods -n "$NAMESPACE" -l control-plane=controller-manager -o jsonpath="$ctr")
+              echo "$sc" | grep -q '"allowPrivilegeEscalation":false'
+              echo "$sc" | grep -q '"drop":\["ALL"\]'
+              seccomp=$(kubectl get pods -n "$NAMESPACE" -l control-plane=controller-manager -o jsonpath='{.items[0].spec.securityContext.seccompProfile.type}')
+              test "$seccomp" = RuntimeDefault
+              # EB-5: extraEnv reaches the container, after the chart's own.
+              envs=$(kubectl get pods -n "$NAMESPACE" -l control-plane=controller-manager -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="NO_PROXY")].value}')
+              test "$envs" = ".svc,.cluster.local"
         - assert:
             resource:
               apiVersion: coordination.k8s.io/v1
@@ -170,3 +187,813 @@ spec:
       cleanup:
         - script:
             content: kubectl delete clusterrolebinding "e2e-metrics-${NAMESPACE}" --ignore-not-found
+
+    # What follows runs the claims against a real Mosquitto in the test
+    # namespace (Pod Security `restricted`, so it runs as the image's mosquitto
+    # user, 1883) with TLS from a cert-manager certificate for the Service name,
+    # which the brokers verify, and the Dynamic Security plugin, whose admin is
+    # made by the same image's mosquitto_ctrl in an init container. The image is
+    # the one of .github/workflows/integration.yml. The `mqc` pod runs the same
+    # image's clients with the CA mounted: `/m/mq` runs a client as the login whose
+    # name and password are the first two lines of its stdin (so a credential
+    # never appears in an argument of `kubectl exec`) and `/m/dyn` sends one
+    # Dynamic Security request as the admin and prints the answer (JSON).
+    - name: a TLS Mosquitto with Dynamic Security
+      try:
+        - apply:
+            resource:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: mosquitto-admin
+              stringData:
+                username: admin
+                password: e2e-only-admin-password
+        - apply:
+            resource:
+              apiVersion: cert-manager.io/v1
+              kind: Issuer
+              metadata:
+                name: mosquitto-selfsigned
+              spec:
+                selfSigned: {}
+        - apply:
+            resource:
+              apiVersion: cert-manager.io/v1
+              kind: Certificate
+              metadata:
+                name: mosquitto-ca
+              spec:
+                isCA: true
+                commonName: e2e mosquitto CA
+                secretName: mosquitto-ca
+                privateKey:
+                  algorithm: ECDSA
+                  size: 256
+                issuerRef:
+                  name: mosquitto-selfsigned
+                  kind: Issuer
+        - apply:
+            resource:
+              apiVersion: cert-manager.io/v1
+              kind: Issuer
+              metadata:
+                name: mosquitto-ca
+              spec:
+                ca:
+                  secretName: mosquitto-ca
+        - apply:
+            resource:
+              apiVersion: cert-manager.io/v1
+              kind: Certificate
+              metadata:
+                name: mosquitto-tls
+              spec:
+                secretName: mosquitto-tls
+                privateKey:
+                  algorithm: ECDSA
+                  size: 256
+                  encoding: PKCS8
+                usages: [digital signature, server auth]
+                dnsNames:
+                  - mosquitto
+                  - (join('.', ['mosquitto', $namespace, 'svc']))
+                  - (join('.', ['mosquitto', $namespace, 'svc', 'cluster.local']))
+                issuerRef:
+                  name: mosquitto-ca
+                  kind: Issuer
+        - assert:
+            resource:
+              apiVersion: cert-manager.io/v1
+              kind: Certificate
+              metadata:
+                name: mosquitto-tls
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+        - apply:
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: mosquitto-conf
+              data:
+                mosquitto.conf: |
+                  # The same settings as test/integration/mosquitto.conf, with the
+                  # paths of this pod.
+                  per_listener_settings false
+                  allow_anonymous false
+
+                  listener 8883
+                  certfile /tls/server.crt
+                  keyfile /tls/server.key
+
+                  plugin /usr/lib/mosquitto_dynamic_security.so
+                  plugin_opt_config_file /mosquitto/data/dynamic-security.json
+
+                  persistence false
+                  log_dest stdout
+        - apply:
+            resource:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: mosquitto
+              spec:
+                selector:
+                  app: mosquitto
+                ports:
+                  - name: mqtts
+                    port: 8883
+                    targetPort: mqtts
+        - apply:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: mosquitto
+              spec:
+                replicas: 1
+                strategy:
+                  type: Recreate
+                selector:
+                  matchLabels:
+                    app: mosquitto
+                template:
+                  metadata:
+                    labels:
+                      app: mosquitto
+                  spec:
+                    securityContext:
+                      runAsNonRoot: true
+                      runAsUser: 1883
+                      runAsGroup: 1883
+                      fsGroup: 1883
+                      seccompProfile:
+                        type: RuntimeDefault
+                    initContainers:
+                      # mosquitto_ctrl writes the plugin's initial state (the admin
+                      # and its role); it exits non-zero by design, so the file is
+                      # what is checked.
+                      - name: dynsec-init
+                        image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+                        command: [sh, -c]
+                        args:
+                          - 'mosquitto_ctrl dynsec init /mosquitto/data/dynamic-security.json "$ADMIN_USER" "$ADMIN_PASS" >/dev/null 2>&1 || true; test -s /mosquitto/data/dynamic-security.json'
+                        env:
+                          - name: ADMIN_USER
+                            valueFrom:
+                              secretKeyRef: {name: mosquitto-admin, key: username}
+                          - name: ADMIN_PASS
+                            valueFrom:
+                              secretKeyRef: {name: mosquitto-admin, key: password}
+                        securityContext:
+                          allowPrivilegeEscalation: false
+                          capabilities:
+                            drop: [ALL]
+                        volumeMounts:
+                          - {name: data, mountPath: /mosquitto/data}
+                    containers:
+                      - name: mosquitto
+                        # Same image as .github/workflows/integration.yml.
+                        image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+                        ports:
+                          - name: mqtts
+                            containerPort: 8883
+                        # A TCP connection to the pod IP, as a client makes it: the
+                        # kubelet dials the port, nothing here uses a local socket.
+                        readinessProbe:
+                          tcpSocket:
+                            port: mqtts
+                          periodSeconds: 3
+                        securityContext:
+                          allowPrivilegeEscalation: false
+                          capabilities:
+                            drop: [ALL]
+                        volumeMounts:
+                          - {name: data, mountPath: /mosquitto/data}
+                          - {name: conf, mountPath: /mosquitto/config, readOnly: true}
+                          - {name: tls, mountPath: /tls, readOnly: true}
+                    volumes:
+                      - name: data
+                        emptyDir: {}
+                      - name: conf
+                        configMap:
+                          name: mosquitto-conf
+                      - name: tls
+                        secret:
+                          secretName: mosquitto-tls
+                          items:
+                            - {key: tls.crt, path: server.crt}
+                            - {key: tls.key, path: server.key}
+        - assert:
+            timeout: 5m
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: mosquitto
+              status:
+                availableReplicas: 1
+        - apply:
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: mqc-bin
+              data:
+                mq: |
+                  #!/bin/sh
+                  # mq CMD ARGS...: runs a mosquitto client as the login whose name
+                  # and password are the first two lines of stdin.
+                  set -eu
+                  IFS= read -r U
+                  IFS= read -r P
+                  cmd=$1
+                  shift
+                  exec "$cmd" -h "$HOST" -p 8883 --cafile /ca/ca.crt -u "$U" -P "$P" "$@"
+                dyn: |
+                  #!/bin/sh
+                  # dyn JSON: sends a Dynamic Security request as the admin and
+                  # prints the answer.
+                  set -eu
+                  exec mosquitto_rr -h "$HOST" -p 8883 --cafile /ca/ca.crt -u "$ADMIN_USER" -P "$ADMIN_PASS" \
+                    -t '$CONTROL/dynamic-security/v1' -e '$CONTROL/dynamic-security/v1/response' -W 10 -m "$1"
+        - apply:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: mqc
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: mqc
+                template:
+                  metadata:
+                    labels:
+                      app: mqc
+                  spec:
+                    securityContext:
+                      runAsNonRoot: true
+                      runAsUser: 1883
+                      runAsGroup: 1883
+                      seccompProfile:
+                        type: RuntimeDefault
+                    containers:
+                      - name: clients
+                        image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+                        command: [sh, -c, sleep 86400]
+                        env:
+                          - name: HOST
+                            value: (join('.', ['mosquitto', $namespace, 'svc']))
+                          - name: ADMIN_USER
+                            valueFrom:
+                              secretKeyRef: {name: mosquitto-admin, key: username}
+                          - name: ADMIN_PASS
+                            valueFrom:
+                              secretKeyRef: {name: mosquitto-admin, key: password}
+                        securityContext:
+                          allowPrivilegeEscalation: false
+                          capabilities:
+                            drop: [ALL]
+                        volumeMounts:
+                          - {name: ca, mountPath: /ca, readOnly: true}
+                          - {name: bin, mountPath: /m, readOnly: true}
+                    volumes:
+                      - name: ca
+                        secret:
+                          secretName: mosquitto-tls
+                          items:
+                            - {key: ca.crt, path: ca.crt}
+                      - name: bin
+                        configMap:
+                          name: mqc-bin
+                          # 0555 (decimal: YAML 1.2 reads 0555 as 555).
+                          defaultMode: 365
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: mqc
+              status:
+                availableReplicas: 1
+        - script:
+            timeout: 2m
+            content: |
+              set -eu
+              # The broker answers over TLS with a verified certificate, and its
+              # Dynamic Security plugin answers the admin (a bounded retry: the
+              # readiness probe only proves the port is open).
+              deadline=$(( $(date +%s) + 90 ))
+              until kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn '{"commands":[{"command":"listClients"}]}' 2>&1 | grep -q '"admin"'; do
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "the broker did not answer the admin over TLS"
+                  exit 1
+                fi
+                sleep 2
+              done
+
+    - name: the brokers are admitted
+      try:
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: ClusterMqttBroker
+              metadata:
+                name: e2e-mqtt
+              spec:
+                host: (join('.', ['mosquitto', $namespace, 'svc']))
+                tls:
+                  caBundle:
+                    secretRef: {name: mosquitto-tls}
+                adminCredentialsSecretRef:
+                  name: mosquitto-admin
+                  namespace: ($namespace)
+                allowedNamespaces:
+                  from: All
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttBroker
+              metadata:
+                name: team-mqtt
+              spec:
+                host: (join('.', ['mosquitto', $namespace, 'svc']))
+                tls:
+                  caBundle:
+                    secretRef: {name: mosquitto-tls}
+                adminCredentialsSecretRef:
+                  name: mosquitto-admin
+        - assert:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: ClusterMqttBroker
+              metadata:
+                name: e2e-mqtt
+              spec:
+                port: 8883
+                protocol: mqtts
+                controlTopic: $CONTROL/dynamic-security/v1
+                topicRoot: '{namespace}/'
+
+    - name: MqttUsers are created and become ready
+      try:
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: sensor
+              spec:
+                serverRef: {kind: ClusterMqttBroker, name: e2e-mqtt}
+                binding: {secretName: sensor-mqtt}
+                acls:
+                  - {topic: 'data/#', access: PublishSubscribe}
+                  - {topic: 'cmd/#', access: Subscribe}
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: auditor
+              spec:
+                serverRef: {kind: ClusterMqttBroker, name: e2e-mqtt}
+                binding: {secretName: auditor-mqtt}
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: team-user
+              spec:
+                serverRef: {kind: MqttBroker, name: team-mqtt}
+                binding: {secretName: team-user-mqtt}
+                acls:
+                  - {topic: 'x/#', access: Publish}
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: sensor
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+                (conditions[?type == 'Synced'] | [0].status): "True"
+                binding:
+                  name: sensor-mqtt
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: auditor
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: team-user
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: sensor-mqtt
+              type: servicebinding.io/mqtt
+        - script:
+            timeout: 2m
+            content: |
+              set -eu
+              dyn() { kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn "{\"commands\":[{\"command\":\"$1\",\"$2\":\"$3\"}]}" 2>&1; }
+              sec() { kubectl get secret "$1" -n "$NAMESPACE" -o "jsonpath={.data.$2}" | base64 -d; }
+              base=$(kubectl get mqttuser sensor -n "$NAMESPACE" -o jsonpath='{.status.externalName}')
+              test -n "$base"
+              root=$(sec sensor-mqtt topicRoot)
+              test "$root" = "${NAMESPACE}/"
+              # The role, with its ACLs under the tenant root and the claim's
+              # marker, and the login that holds it, exist on the broker.
+              role=$(dyn getRole rolename "$base")
+              printf %s "$role" | grep -q 'craftainer.dev/claim='
+              printf %s "$role" | grep -qF "${root}data/#"
+              printf %s "$role" | grep -qF "${root}cmd/#"
+              login=$(dyn getClient username "$(sec sensor-mqtt username)")
+              printf %s "$login" | grep -q 'craftainer.dev/claim='
+              # The binding names the broker and its CA, and is not the admin's.
+              test "$(sec sensor-mqtt host)" = "mosquitto.${NAMESPACE}.svc"
+              test "$(sec sensor-mqtt port)" = 8883
+              test -n "$(sec sensor-mqtt sslrootcert)"
+              test "$(sec sensor-mqtt username)" != admin
+
+    - name: a binding connects over TLS, publishes and subscribes, and the ACLs refuse the rest
+      try:
+        - script:
+            timeout: 3m
+            content: |
+              set -eu
+              sec() { kubectl get secret "$1" -n "$NAMESPACE" -o "jsonpath={.data.$2}" | base64 -d; }
+              # mqs SECRET CMD ARGS...: runs a client as the login of a binding
+              # Secret; the credentials go in on stdin, not in an argument.
+              mqs() { s=$1; shift; { sec "$s" username; echo; sec "$s" password; echo; } | kubectl exec -i -n "$NAMESPACE" deploy/mqc -- /m/mq "$@"; }
+              root=$(sec sensor-mqtt topicRoot)
+              # Retained messages make each check deterministic: the broker
+              # stores what a publish was allowed, and hands it to a later
+              # subscriber, so nothing waits for a race.
+              #
+              # The auditor holds the whole tenant root and publishes a message
+              # on a topic the sensor has no grant for.
+              mqs auditor-mqtt mosquitto_pub -q 1 -r -t "${root}secret/a" -m auditor-secret
+              # The sensor publishes inside its grant (data/#) and reads it back.
+              mqs sensor-mqtt mosquitto_pub -q 1 -r -t "${root}data/a" -m hello-from-e2e
+              out=$(mqs sensor-mqtt mosquitto_sub -v -C 1 -W 20 -t "${root}data/#")
+              printf %s "$out" | grep -q 'hello-from-e2e'
+              # Subscribing outside the grant delivers nothing. The sensor does
+              # hold a Subscribe grant on cmd/#, and not on secret/#. The absence
+              # is observed for a bounded window (-W).
+              out=$(mqs sensor-mqtt mosquitto_sub -v -W 4 -t "${root}secret/#" 2>/dev/null) || true
+              if printf %s "$out" | grep -q 'auditor-secret'; then
+                echo "the sensor received a message outside its grant"
+                exit 1
+              fi
+              # Publishing outside the grant, or on a Subscribe-only topic, is
+              # refused: nothing is retained (the auditor, who sees both topics,
+              # is the witness; its own message shows the window did observe).
+              mqs sensor-mqtt mosquitto_pub -q 1 -r -t "${root}secret/b" -m sensor-forbidden >/dev/null 2>&1 || true
+              mqs sensor-mqtt mosquitto_pub -q 1 -r -t "${root}cmd/x" -m sensor-forbidden >/dev/null 2>&1 || true
+              out=$(mqs auditor-mqtt mosquitto_sub -v -W 4 -t "${root}#") || true
+              printf %s "$out" | grep -q 'auditor-secret'
+              printf %s "$out" | grep -q 'hello-from-e2e'
+              if printf %s "$out" | grep -q 'sensor-forbidden'; then
+                echo "a publish outside the grant was accepted"
+                exit 1
+              fi
+              # A MqttUser on the namespaced MqttBroker connects as well.
+              troot=$(sec team-user-mqtt topicRoot)
+              mqs team-user-mqtt mosquitto_pub -q 1 -t "${troot}x/a" -m from-team-user
+
+    - name: a wrong password is refused
+      try:
+        - script:
+            content: |
+              set -eu
+              sec() { kubectl get secret "$1" -n "$NAMESPACE" -o "jsonpath={.data.$2}" | base64 -d; }
+              root=$(sec sensor-mqtt topicRoot)
+              if { sec sensor-mqtt username; echo; echo not-the-password; } | kubectl exec -i -n "$NAMESPACE" deploy/mqc -- /m/mq mosquitto_pub -q 1 -t "${root}data/b" -m x >/dev/null 2>&1; then
+                echo "a login with a wrong password was accepted"
+                exit 1
+              fi
+
+    - name: deleting an MqttUser removes its login and role and ends its sessions
+      try:
+        - apply:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: watcher
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 1883
+                  runAsGroup: 1883
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: sub
+                    image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+                    # A long-lived subscriber with the sensor's binding. It prints
+                    # the messages it receives; when the broker ends the session it
+                    # exits and says so.
+                    command: [sh, -c]
+                    args:
+                      - 'mosquitto_sub -v -h "$HOST" -p "$PORT" --cafile /ca/ca.crt -u "$USER_NAME" -P "$USER_PASS" -i "$CLIENT_ID" -t "${ROOT}data/#"; echo "mosquitto_sub exited with $?"'
+                    env:
+                      - name: HOST
+                        valueFrom:
+                          secretKeyRef: {name: sensor-mqtt, key: host}
+                      - name: PORT
+                        valueFrom:
+                          secretKeyRef: {name: sensor-mqtt, key: port}
+                      - name: USER_NAME
+                        valueFrom:
+                          secretKeyRef: {name: sensor-mqtt, key: username}
+                      - name: USER_PASS
+                        valueFrom:
+                          secretKeyRef: {name: sensor-mqtt, key: password}
+                      - name: CLIENT_ID
+                        valueFrom:
+                          secretKeyRef: {name: sensor-mqtt, key: clientId}
+                      - name: ROOT
+                        valueFrom:
+                          secretKeyRef: {name: sensor-mqtt, key: topicRoot}
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: [ALL]
+                    volumeMounts:
+                      - {name: ca, mountPath: /ca, readOnly: true}
+                volumes:
+                  - name: ca
+                    secret:
+                      secretName: mosquitto-tls
+                      items:
+                        - {key: ca.crt, path: ca.crt}
+        - script:
+            timeout: 2m
+            content: |
+              set -eu
+              # The watcher is connected and subscribed once it has the retained
+              # message of the earlier step.
+              deadline=$(( $(date +%s) + 90 ))
+              until kubectl logs -n "$NAMESPACE" watcher 2>/dev/null | grep -q 'hello-from-e2e'; do
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "the watcher did not receive its message"
+                  exit 1
+                fi
+                sleep 2
+              done
+        - script:
+            content: |
+              set -eu
+              # The sensor's credentials, for the check after the claim is gone
+              # (kept in files nobody else can read, removed in the cleanup).
+              umask 077
+              sec() { kubectl get secret sensor-mqtt -n "$NAMESPACE" -o "jsonpath={.data.$1}" | base64 -d; }
+              { sec username; echo; sec password; echo; } > "${TMPDIR:-/tmp}/e2e-sensor-login-$NAMESPACE"
+              kubectl get mqttuser sensor -n "$NAMESPACE" -o jsonpath='{.status.externalName}' > "${TMPDIR:-/tmp}/e2e-sensor-base-$NAMESPACE"
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              name: sensor
+        - error:
+            resource:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: sensor-mqtt
+        - script:
+            timeout: 3m
+            content: |
+              set -eu
+              dyn() { kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn "{\"commands\":[{\"command\":\"$1\",\"$2\":\"$3\"}]}" 2>&1; }
+              base=$(cat "${TMPDIR:-/tmp}/e2e-sensor-base-$NAMESPACE")
+              login=$(head -n 1 "${TMPDIR:-/tmp}/e2e-sensor-login-$NAMESPACE")
+              test -n "$base" -a -n "$login"
+              # The deleted login stops working (a bounded retry: the plugin
+              # applies the deletion at once, the retry only covers the claim's
+              # deletion finishing).
+              deadline=$(( $(date +%s) + 60 ))
+              while kubectl exec -i -n "$NAMESPACE" deploy/mqc -- /m/mq mosquitto_pub -q 1 -t "${NAMESPACE}/data/c" -m x < "${TMPDIR:-/tmp}/e2e-sensor-login-$NAMESPACE" >/dev/null 2>&1; do
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "the deleted login still connects"
+                  exit 1
+                fi
+                sleep 2
+              done
+              # Its open session was ended by the broker: the watcher's
+              # subscriber exited on its own.
+              deadline=$(( $(date +%s) + 60 ))
+              until kubectl logs -n "$NAMESPACE" watcher 2>/dev/null | grep -q 'mosquitto_sub exited'; do
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "the deleted login's session was not ended"
+                  exit 1
+                fi
+                sleep 2
+              done
+              # The role and the logins are gone from the broker, whatever the
+              # operator's default deletionPolicy (Retain): a credential kind has
+              # none.
+              dyn getRole rolename "$base" | grep -qi 'not found'
+              dyn getClient username "$login" | grep -qi 'not found'
+              dyn getClient username "${base}-b" | grep -qi 'not found'
+              # The other users are untouched.
+              kubectl get mqttuser auditor team-user -n "$NAMESPACE" >/dev/null
+
+    - name: a name that the broker already holds is a NameCollision, and a claim that never created anything is released
+      try:
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: ghost
+              spec:
+                serverRef: {kind: ClusterMqttBroker, name: e2e-mqtt}
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: ghost
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+        - script:
+            content: |
+              set -eu
+              umask 077
+              kubectl get mqttuser ghost -n "$NAMESPACE" -o jsonpath='{.status.externalName}' > "${TMPDIR:-/tmp}/e2e-ghost-base-$NAMESPACE"
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              name: ghost
+        - script:
+            timeout: 2m
+            content: |
+              set -eu
+              dyn() { kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn "$1" 2>&1; }
+              base=$(cat "${TMPDIR:-/tmp}/e2e-ghost-base-$NAMESPACE")
+              test -n "$base"
+              # The claim removed its own objects. Someone else now makes a role
+              # and a login of the same names, without the claim's marker.
+              dyn "{\"commands\":[{\"command\":\"getRole\",\"rolename\":\"${base}\"}]}" | grep -qi 'not found'
+              dyn "{\"commands\":[{\"command\":\"createRole\",\"rolename\":\"${base}\"},{\"command\":\"createClient\",\"username\":\"${base}-a\",\"password\":\"e2e-foreign\"}]}" | grep -qv '"error"'
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: ghost
+              spec:
+                serverRef: {kind: ClusterMqttBroker, name: e2e-mqtt}
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: ghost
+              status:
+                (conditions[?type == 'Synced'] | [0].status): "False"
+                (conditions[?type == 'Synced'] | [0].reason): NameCollision
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              name: ghost
+        - script:
+            timeout: 2m
+            content: |
+              set -eu
+              dyn() { kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn "{\"commands\":[{\"command\":\"$1\",\"$2\":\"$3\"}]}" 2>&1; }
+              base=$(cat "${TMPDIR:-/tmp}/e2e-ghost-base-$NAMESPACE")
+              # The claim is gone, and the objects it did not make are still
+              # there, unchanged.
+              if dyn getRole rolename "$base" | grep -qi 'not found'; then
+                echo "the foreign role was deleted"
+                exit 1
+              fi
+              if dyn getClient username "${base}-a" | grep -qi 'not found'; then
+                echo "the foreign login was deleted"
+                exit 1
+              fi
+              dyn deleteClient username "${base}-a" >/dev/null
+              dyn deleteRole rolename "$base" >/dev/null
+
+    - name: foreign objects are skipped on delete and the finalizer is released
+      try:
+        - apply:
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: claimed
+              spec:
+                serverRef: {kind: ClusterMqttBroker, name: e2e-mqtt}
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              metadata:
+                name: claimed
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+        - script:
+            timeout: 2m
+            content: |
+              set -eu
+              dyn() { kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn "$1" 2>&1; }
+              umask 077
+              base=$(kubectl get mqttuser claimed -n "$NAMESPACE" -o jsonpath='{.status.externalName}')
+              test -n "$base"
+              echo "$base" > "${TMPDIR:-/tmp}/e2e-claimed-base-$NAMESPACE"
+              # The role and the logins now carry the marker of another claim, as
+              # after a restore (a new UID).
+              other='craftainer.dev/claim=other/other/00000000-0000-0000-0000-000000000000'
+              cmd="{\"commands\":[{\"command\":\"modifyRole\",\"rolename\":\"${base}\",\"textdescription\":\"${other} active=a\"},{\"command\":\"modifyClient\",\"username\":\"${base}-a\",\"textdescription\":\"${other}\"}]}"
+              dyn "$cmd" >/dev/null
+              deadline=$(( $(date +%s) + 60 ))
+              until dyn "{\"commands\":[{\"command\":\"getRole\",\"rolename\":\"${base}\"}]}" | grep -q 'other/other/00000000'; do
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "the broker did not take the new marker"
+                  exit 1
+                fi
+                sleep 2
+              done
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              name: claimed
+        - script:
+            timeout: 2m
+            content: |
+              set -eu
+              dyn() { kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn "{\"commands\":[{\"command\":\"$1\",\"$2\":\"$3\"}]}" 2>&1; }
+              base=$(cat "${TMPDIR:-/tmp}/e2e-claimed-base-$NAMESPACE")
+              # The claim is gone; the objects with another claim's marker were
+              # skipped, not deleted.
+              if dyn getRole rolename "$base" | grep -qi 'not found'; then
+                echo "the foreign role was deleted"
+                exit 1
+              fi
+              dyn getRole rolename "$base" | grep -q 'other/other/00000000'
+              if dyn getClient username "${base}-a" | grep -qi 'not found'; then
+                echo "the foreign login was deleted"
+                exit 1
+              fi
+              dyn deleteClient username "${base}-a" >/dev/null
+              dyn deleteRole rolename "$base" >/dev/null
+
+    - name: the remaining users and the brokers are deleted
+      try:
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              name: auditor
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttUser
+              name: team-user
+        - script:
+            content: |
+              set -eu
+              # No role or login of the claims is left on the broker (the admin's
+              # own are the only ones).
+              out=$(kubectl exec -n "$NAMESPACE" deploy/mqc -- /m/dyn '{"commands":[{"command":"listClients"}]}' 2>&1)
+              printf %s "$out" | grep -q '"clients":\["admin"\]'
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttBroker
+              name: team-mqtt
+        - delete:
+            ref:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: ClusterMqttBroker
+              name: e2e-mqtt
