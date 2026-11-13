@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -186,6 +187,7 @@ func (r *UserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&mqttv1alpha1.MqttBroker{},
 			handler.EnqueueRequestsFromMapFunc(usersOfBroker(reader, mqttv1alpha1.KindMqttBroker)),
 			builder.WithPredicates(brokerChanged)).
+		WithOptions(ctrlcontroller.Options{MaxConcurrentReconciles: max(1, r.MaxConcurrentReconciles)}).
 		Named("mqttuser").
 		Complete(r)
 }

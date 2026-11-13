@@ -88,6 +88,7 @@ from values (`values.schema.json` checks the two enums).
 
 | Setting | Environment | Chart value | Meaning |
 | --- | --- | --- | --- |
+| `--max-concurrent-reconciles` | none | none (`1`) | How many MqttUsers reconcile at once. The default `1` serializes them, so one reconcile that waits on an unreachable broker (until its connection timeout) holds up every other user, including users of healthy brokers. Raise it to bound that; it must be at least 1. |
 | `--egress-mode` | `EGRESS_MODE` | `egressMode` (`strict`) | Which broker and proxy addresses the operator may not dial: `strict` refuses loopback, link-local, cloud metadata and the private ranges; `allow-private` allows the private ranges. Set `allow-private` when the broker is an in-cluster Service. |
 | `--operator-namespace` | `POD_NAMESPACE` | (downward API) | The namespace the admin Secrets and CA bundles of cluster brokers are read from. Without it, and without the pod's service account, startup fails. |
 | `--default-data-deletion-policy` | `DEFAULT_DATA_DELETION_POLICY` | `defaultDataDeletionPolicy` (`Retain`) | The default for data kinds. `MqttUser` is a credential kind and has no `deletionPolicy`, so it is only validated. |
@@ -107,6 +108,19 @@ alone and does not retry with backoff. Either:
 
 Deleting a claim in this state removes only the objects that carry its marker (if
 any) and leaves the foreign ones in place; the claim then goes.
+
+### The deletion rule
+
+This is the rule every Craftainer operator follows when a claim is deleted:
+
+1. A claim that never issued a create (`status.externalId` is not set) is
+   released without contacting the broker. There is nothing of its own to remove.
+2. Otherwise the operator removes only the objects that carry the claim's own
+   marker. A foreign object (no marker, or another claim's) is skipped: it stays
+   on the broker and the finalizer is released anyway. A foreign object never
+   blocks deletion and is never deleted.
+3. The operator does not look at a broker's `Ready` condition to delete; it
+   connects whenever the claim issued a create.
 
 ## Known limits
 

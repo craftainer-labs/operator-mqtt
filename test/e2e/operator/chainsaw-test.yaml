@@ -1,7 +1,6 @@
 # Installs the Helm chart into a Pod Security `restricted` namespace, with the
 # manager running as an arbitrary UID, then exercises the mqtt.craftainer.dev API
-# end to end: the CRDs, their defaults and the webhooks (the controllers come
-# later). The steps run in order; the cluster is thrown away afterwards.
+# end to end: the CRDs, their defaults and the webhooks. The steps run in order; the cluster is thrown away afterwards.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

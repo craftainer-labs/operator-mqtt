@@ -362,6 +362,18 @@ func TestControllerSettings(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(cs.namespace).To(Equal("flag-ns"))
 	g.Expect(cs.egress.Check(netip.MustParseAddr("10.0.0.1"))).To(MatchError(egress.ErrBlocked))
+	g.Expect(cs.maxConcurrent).To(Equal(1))
+
+	s, err = parseFlags([]string{"--max-concurrent-reconciles=4"}, io.Discard)
+	g.Expect(err).NotTo(HaveOccurred())
+	cs, err = s.controllerSettings()
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(cs.maxConcurrent).To(Equal(4))
+
+	s, err = parseFlags([]string{"--max-concurrent-reconciles=0"}, io.Discard)
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = s.controllerSettings()
+	g.Expect(err).To(MatchError(ErrInvalidConcurrency))
 }
 
 // An invalid setting fails startup before the operator contacts a cluster.

@@ -81,6 +81,7 @@ type settings struct {
 	egressMode       string
 	deletionPolicy   string
 	operatorNS       string
+	maxConcurrent    int
 	zap              zap.Options
 }
 
@@ -118,6 +119,9 @@ func parseFlags(args []string, stderr io.Writer) (*settings, error) {
 	fs.StringVar(&s.operatorNS, "operator-namespace", os.Getenv(server.OperatorNamespaceEnv),
 		"The namespace cluster brokers' admin Secrets and CA bundles are read from. Empty: the pod's namespace (needs the service account). Default: $"+
 			server.OperatorNamespaceEnv+".")
+	fs.IntVar(&s.maxConcurrent, "max-concurrent-reconciles", 1,
+		"How many MqttUsers are reconciled at once. 1 (the default) serializes them, so a reconcile that waits on an unreachable broker "+
+			"holds up every other user until its broker timeout; raise it to bound that. Must be at least 1.")
 	s.zap.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -173,11 +177,15 @@ var serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount
 // guessed namespace could be a tenant's.
 var ErrNoOperatorNamespace = errors.New("cannot determine the operator namespace: set --operator-namespace or POD_NAMESPACE, or run in a pod with a service account")
 
+// ErrInvalidConcurrency is returned when --max-concurrent-reconciles is below 1.
+var ErrInvalidConcurrency = errors.New("--max-concurrent-reconciles must be at least 1")
+
 // controllerSettings are the checked settings the controllers are built from.
 type controllerSettings struct {
-	egress    egress.Policy
-	deletion  common.DeletionPolicy
-	namespace string
+	egress        egress.Policy
+	deletion      common.DeletionPolicy
+	namespace     string
+	maxConcurrent int
 }
 
 // controllerSettings validates the egress mode, the default deletion policy and
@@ -191,6 +199,9 @@ func (s *settings) controllerSettings() (controllerSettings, error) {
 	if err != nil {
 		return controllerSettings{}, err
 	}
+	if s.maxConcurrent < 1 {
+		return controllerSettings{}, fmt.Errorf("%w: got %d", ErrInvalidConcurrency, s.maxConcurrent)
+	}
 	ns := s.operatorNS
 	if ns == "" {
 		if b, err := os.ReadFile(serviceAccountNamespaceFile); err == nil {
@@ -201,8 +212,8 @@ func (s *settings) controllerSettings() (controllerSettings, error) {
 		return controllerSettings{}, ErrNoOperatorNamespace
 	}
 	ctrl.Log.WithName("setup").Info("controller settings", "egressMode", string(mode),
-		"defaultDataDeletionPolicy", string(policy), "operatorNamespace", ns)
-	return controllerSettings{egress: egress.NewPolicy(mode), deletion: policy, namespace: ns}, nil
+		"defaultDataDeletionPolicy", string(policy), "operatorNamespace", ns, "maxConcurrentReconciles", s.maxConcurrent)
+	return controllerSettings{egress: egress.NewPolicy(mode), deletion: policy, namespace: ns, maxConcurrent: s.maxConcurrent}, nil
 }
 
 // Option adjusts the manager's options; tests use it, the binary passes none.
@@ -335,6 +346,7 @@ func setup(mgr ctrl.Manager, webhooks bool, cs controllerSettings) error {
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder(EventRecorderName),
 		ManagedBy: EventRecorderName, OperatorNamespace: cs.namespace, DefaultDeletionPolicy: cs.deletion,
 		Egress: cs.egress, Connect: controller.ConnectAdmin, Cache: controller.NewBrokerCache(brokerCacheIdle),
+		MaxConcurrentReconciles: cs.maxConcurrent,
 	}
 	steps = append(steps, setupStep{"MqttUser controller", (&controller.UserReconciler{Config: cfg}).SetupWithManager})
 	// +kubebuilder:scaffold:builder

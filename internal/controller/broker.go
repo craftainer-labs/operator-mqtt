@@ -97,6 +97,10 @@ type Config struct {
 	// connects for every use and nobody closes the connection, so the operator
 	// always sets one.
 	Cache *BrokerCache
+	// MaxConcurrentReconciles is how many MqttUsers reconcile at once; below 1
+	// means 1. A reconcile that waits on a dead broker holds up the others until
+	// its timeout, so a larger value bounds that.
+	MaxConcurrentReconciles int
 	// Now is the clock of the lifecycle (rotation and grace periods); nil is
 	// time.Now. Tests advance it.
 	Now func() time.Time
