@@ -284,6 +284,8 @@ func (a *Admin) do(ctx context.Context, command string, fields map[string]any) (
 	switch {
 	case pr != nil && err != nil:
 		return nil, fmt.Errorf("%w: %s: publish refused: %w", ErrAuth, command, err)
+	case !a.Alive():
+		return nil, fmt.Errorf("%w: %s: connection lost", ErrUnavailable, command)
 	case ctx.Err() != nil:
 		return nil, ctxErr(ctx, command)
 	case err != nil:

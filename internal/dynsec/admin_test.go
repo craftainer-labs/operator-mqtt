@@ -234,6 +234,17 @@ func TestCommandFailures(t *testing.T) {
 	})
 	t.Run("connection closed before the PUBACK", func(t *testing.T) {
 		fb := newFakeBroker(t, behavior{closeOnPublish: true}, echo)
+		a, err := Connect(context.Background(), shortConfig(fb))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer a.Close()
+		if err := a.DeleteClient(context.Background(), "u"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("publish refused by the client", func(t *testing.T) {
+		fb := newFakeBroker(t, behavior{noQoS1: true}, echo)
 		a := connect(t, fb)
 		if err := a.DeleteClient(context.Background(), "u"); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("err = %v", err)

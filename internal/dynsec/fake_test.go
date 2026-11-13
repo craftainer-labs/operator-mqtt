@@ -38,6 +38,7 @@ type behavior struct {
 	closeOnPublish     bool // read PUBLISH, close without a PUBACK
 	closeAfterPuback   bool // PUBACK, then close
 	noise              bool // before each answer, send two messages that are not answers
+	noQoS1             bool // CONNACK says the maximum QoS is 0, so a QoS 1 publish is refused by the client
 
 	// sans are the names of the server certificate; default localhost and
 	// 127.0.0.1.
@@ -173,7 +174,7 @@ func write(c net.Conn, cp *packets.ControlPacket) {
 
 func (fb *fakeBroker) serve(c net.Conn) {
 	defer fb.wg.Done()
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	for {
 		cp, err := packets.ReadPacket(c)
 		if err != nil {
@@ -213,7 +214,12 @@ func (fb *fakeBroker) connect(c net.Conn, p *packets.Connect) bool {
 		code = 0x86
 	}
 	ack := packets.NewControlPacket(packets.CONNACK)
-	ack.Content = &packets.Connack{ReasonCode: code, Properties: &packets.Properties{}}
+	props := &packets.Properties{}
+	if fb.b.noQoS1 {
+		zero := byte(0)
+		props.MaximumQoS = &zero
+	}
+	ack.Content = &packets.Connack{ReasonCode: code, Properties: props}
 	write(c, ack)
 	return code == 0 && !fb.b.closeAfterConnack
 }

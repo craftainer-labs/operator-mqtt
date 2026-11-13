@@ -220,21 +220,29 @@ func (b broker) mustLogin(t *testing.T, user, password string) *session {
 
 func (s *session) close() { _ = s.cli.Disconnect(&paho.Disconnect{}) }
 
-// subscribe returns the SUBACK's first reason code: 0 to 2 for the granted
-// QoS, 0x87 for not authorized.
+// subscribe returns 0 when the SUBACK grants the subscription and its reason
+// code (0x87 for not authorized) when it does not.
 func (s *session) subscribe(topic string) (byte, error) {
 	sa, err := s.cli.Subscribe(bg, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: topic, QoS: 1}}})
 	if sa == nil {
 		return 0, err
 	}
+	// 0x00 to 0x02 are the granted QoS (the broker grants 1 for the 1 asked).
+	if sa.Reasons[0] < 0x80 {
+		return 0, err
+	}
 	return sa.Reasons[0], err
 }
 
-// publish returns the PUBACK's reason code: 0 for taken, 0x87 for not
-// authorized.
+// publish returns 0 when the PUBACK takes the message and its reason code (0x87
+// for not authorized) when it does not.
 func (s *session) publish(topic, payload string) (byte, error) {
 	pr, err := s.cli.Publish(bg, &paho.Publish{QoS: 1, Topic: topic, Payload: []byte(payload)})
 	if pr == nil {
+		return 0, err
+	}
+	// 0x10 is "no matching subscribers": the publish was taken.
+	if pr.ReasonCode < 0x80 {
 		return 0, err
 	}
 	return pr.ReasonCode, err
