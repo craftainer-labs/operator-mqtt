@@ -205,8 +205,8 @@ func TestBrokerCacheNeverClosesAConnectionInUse(t *testing.T) {
 	}
 	c.Forget("k")
 	for _, g := range all {
-		if g.memBroker.closed != 1 {
-			t.Fatalf("a connection was closed %d times", g.memBroker.closed)
+		if g.closed != 1 {
+			t.Fatalf("a connection was closed %d times", g.closed)
 		}
 	}
 }
