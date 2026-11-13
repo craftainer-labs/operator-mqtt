@@ -503,7 +503,9 @@ func TestUserOnAnUnusableBroker(t *testing.T) {
 		}
 	})
 	t.Run("proxy with credentials", func(t *testing.T) {
-		h := newHarness(t, func(s *mqttv1alpha1.ClusterMqttBroker) { s.Spec.ProxyURL = "http://user:hunter2@proxy.example.test:3128" })
+		h := newHarness(t, func(s *mqttv1alpha1.ClusterMqttBroker) {
+			s.Spec.ProxyURL = "http://user:hunter2@proxy.example.test:3128"
+		})
 		r := &UserReconciler{h.cfg}
 		u := h.user("gateway", nil)
 		if err := h.reconcile(r, u); err == nil || strings.Contains(err.Error(), "hunter2") {
