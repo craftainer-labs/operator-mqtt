@@ -178,11 +178,12 @@ do not do.
 - **A broker that does not answer holds up other users for the connect timeout
   (ten seconds).** The controller runs one worker unless
   `--max-concurrent-reconciles` is raised, and the connection cache connects with
-  its lock held, so a raised value bounds the delay for reconciles that already
-  have a connection but not for a second broker that is being connected. The
-  cache is safe for concurrent reconciles: a connection that is replaced while a
-  reconcile uses it is closed when that reconcile ends, and a timer closes the
-  connections nobody has used for ten minutes.
+  its lock held, so even with a raised value every reconcile that needs the
+  cache waits for a broker that is being connected. The cache is safe for
+  concurrent reconciles: a connection that is replaced while a reconcile uses it
+  is closed when that reconcile ends, and a timer (checking every five minutes)
+  closes the connections nobody has used for ten minutes, so one can stay open
+  for up to fifteen.
 - **Two rotations within one grace period** reuse the login that the first one
   was still retiring, so its password changes then; the active login is never
   reset.

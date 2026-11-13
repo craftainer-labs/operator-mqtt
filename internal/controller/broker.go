@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -118,13 +119,17 @@ type backend struct {
 	// use: a claim whose broker is not Ready never connects.
 	broker func(ctx context.Context) (Broker, error)
 	// leases are the releases of the connections broker handed out; release
-	// calls them. A reconcile is sequential, so no lock is needed.
-	leases []func()
+	// calls them. The mutex guards the slice in case the lifecycle framework
+	// calls broker from more than one goroutine.
+	leaseMu sync.Mutex
+	leases  []func()
 }
 
 // release gives back every connection the reconcile used. The cache closes a
 // connection it replaced meanwhile only now.
 func (b *backend) release() {
+	b.leaseMu.Lock()
+	defer b.leaseMu.Unlock()
 	for _, l := range b.leases {
 		l()
 	}
@@ -186,7 +191,9 @@ func (c Config) backend(ctx context.Context, ns string, ref common.ServerRef) (*
 		if err != nil {
 			return nil, coarse(ctx, "connect to the broker", err)
 		}
+		b.leaseMu.Lock()
 		b.leases = append(b.leases, release)
+		b.leaseMu.Unlock()
 		return br, nil
 	}
 	return b, nil
