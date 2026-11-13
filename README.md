@@ -31,10 +31,101 @@ reach another namespace's topics. On a `ClusterMqttBroker` it must contain
 whole topic levels (`#` only last), and reject a leading `/`, `$`, empty levels,
 `..` and braces. The CRD descriptions list every rule.
 
+## Controllers
+
+One controller, `MqttUser`, built on `lifecycle.Reconcile` of lib-operator-go.
+It watches the claims, the binding Secrets it owns and the brokers the claims
+name (a field index on `spec.serverRef` maps a broker to its users, so a user
+that waits for its broker, or whose broker's `topicRoot` changed, is reconciled
+when the broker is; a broker's status writes that change nothing else do not
+wake its users).
+
+For each `MqttUser` the operator makes, on the broker named by `serverRef`:
+
+- one **role** holding the user's ACLs, each topic prepended with the tenant
+  root (`<namespace>/` by default). `Publish` is a publish rule, `Subscribe` a
+  subscribe, unsubscribe and receive rule, `PublishSubscribe` both. The rules are
+  synced one at a time, new rules first, so a change never leaves the role with
+  less than it had, and a revoked rule ends the sessions that hold it;
+- two **logins**, `<name>-a` and `<name>-b`, that hold the role and have one
+  password each. The binding Secret (type `servicebinding.io/mqtt`) names the
+  active one: `host`, `port`, `protocol`, `username`, `password`, `clientId`,
+  `topicRoot` and `sslrootcert`. The base `<name>` is `<namespace>-<claim name>`
+  cut to fit and ending in a short hash, kept in `status.externalName`.
+
+A **rotation** (the `craftainer.dev/rotate` annotation or `rotationPolicy`)
+sets a new password on the login that is not active and enables it, writes the
+binding Secret, and after `gracePeriod` disables the previous login, which ends
+its sessions. A change of the ACLs never changes the active password. If the
+binding Secret is missing or does not hold the active login, the operator does
+not reset the login in place: it applies the ACLs, reports `the binding Secret
+does not hold the active login` and rotates to the other login on the next
+reconcile. Deleting the claim deletes both logins and the role, and only those
+objects the claim's marker names.
+
+The operator never adopts what it did not make. Every role and login carries
+`craftainer.dev/claim=<namespace>/<name>/<uid>` in its text description. A role
+or login of the derived name that has no marker, or another claim's, is a
+`NameCollision` and is never changed or deleted (see below). Before the first
+create the claim's `status.externalId` is set to `create-issued`, so a user
+made in part by a crashed reconcile is finished (its objects carry the marker),
+and a claim that never issued a create is released on deletion without the
+broker being asked, which matters when the broker is unreachable or gone. If the
+broker refuses the very first create because someone made the role meanwhile, the
+record is taken back.
+
+Conditions and Events carry one fixed text per kind of failure (the connection
+was refused by the egress policy, the TLS handshake failed, the login was
+refused, the broker did not answer, the connection failed); the broker's own
+words, addresses and Secret names are in the operator log only. A broker whose
+`Ready` condition is `False` is not used (the claim waits and no connection is
+made), except to delete a claim.
+
+### Settings
+
+The manager reads these from flags or the environment; the Helm chart sets them
+from values (`values.schema.json` checks the two enums).
+
+| Setting | Environment | Chart value | Meaning |
+| --- | --- | --- | --- |
+| `--max-concurrent-reconciles` | none | none (`1`) | How many MqttUsers reconcile at once. The default `1` serializes them, so one reconcile that waits on an unreachable broker (until its connection timeout) holds up every other user, including users of healthy brokers. Raise it to bound that; it must be at least 1. |
+| `--egress-mode` | `EGRESS_MODE` | `egressMode` (`strict`) | Which broker and proxy addresses the operator may not dial: `strict` refuses loopback, link-local, cloud metadata and the private ranges; `allow-private` allows the private ranges. Set `allow-private` when the broker is an in-cluster Service. |
+| `--operator-namespace` | `POD_NAMESPACE` | (downward API) | The namespace the admin Secrets and CA bundles of cluster brokers are read from. Without it, and without the pod's service account, startup fails. |
+| `--default-data-deletion-policy` | `DEFAULT_DATA_DELETION_POLICY` | `defaultDataDeletionPolicy` (`Retain`) | The default for data kinds. `MqttUser` is a credential kind and has no `deletionPolicy`, so it is only validated. |
+
+### Resolving a NameCollision
+
+`Synced=False`, reason `NameCollision`, and a message that the broker client or
+role "exists and is not managed by this operator" mean the broker already has a
+role or login named `<base>`, `<base>-a` or `<base>-b` that this claim did not
+make (the claim's `status.externalName` gives `<base>`). The operator leaves it
+alone and does not retry with backoff. Either:
+
+1. delete the object on the broker yourself (`mosquitto_ctrl dynsec deleteRole`
+   or `deleteClient`), after checking nobody uses it, and the next reconcile
+   creates the user; or
+2. rename the `MqttUser`, which gives it another base name.
+
+Deleting a claim in this state removes only the objects that carry its marker (if
+any) and leaves the foreign ones in place; the claim then goes.
+
+### The deletion rule
+
+This is the rule every Craftainer operator follows when a claim is deleted:
+
+1. A claim that never issued a create (`status.externalId` is not set) is
+   released without contacting the broker. There is nothing of its own to remove.
+2. Otherwise the operator removes only the objects that carry the claim's own
+   marker. A foreign object (no marker, or another claim's) is skipped: it stays
+   on the broker and the finalizer is released anyway. A foreign object never
+   blocks deletion and is never deleted.
+3. The operator does not look at a broker's `Ready` condition to delete; it
+   connects whenever the claim issued a create.
+
 ## Known limits
 
-What the broker client (`internal/dynsec`) does and does not do. The controller
-(`MqttUser`) lands in the next change and adds its own limits here.
+What the broker client (`internal/dynsec`) and the `MqttUser` controller do and
+do not do.
 
 - **`mqtts` only.** The API also lists `protocol: wss` (MQTT over WebSocket),
   but the client speaks MQTT v5 over TLS on a TCP socket only, so a broker
@@ -62,8 +153,8 @@ What the broker client (`internal/dynsec`) does and does not do. The controller
   each and the same role, so the old password stays valid while the new one is
   rolled out (NR4). Retiring a login disables it and ends its sessions.
 - **No per-user connection limit.** The plugin has none, so the API's
-  `maxConnections` cannot be enforced by the broker; see the controller's
-  limits when it lands.
+  `maxConnections` cannot be enforced by the broker. The webhook admits a value
+  other than `-1` with a warning, and the controller ignores it.
 - **One connection per broker, kept and checked.** The client logs in once as
   the plugin's admin and reuses the connection; a lost connection is reported as
   `ErrUnavailable` and made again by the caller. It never reads `HTTP(S)_PROXY`.
@@ -71,6 +162,41 @@ What the broker client (`internal/dynsec`) does and does not do. The controller
   `mosquitto_ctrl dynsec init` creates such an admin; a broker managed by hand
   needs `publishClientSend`, `publishClientReceive` and `subscribePattern` on
   `$CONTROL/dynamic-security/#` for it.
+
+- **`wss` is refused.** A broker with `protocol: wss` makes its users fail with
+  "the broker's protocol is not supported" until the client speaks it.
+- **The broker's health is not probed yet.** Nothing writes a broker's `Ready`
+  condition (a server probe follows the lib-operator-go release), so a broker with
+  no `Ready` condition is used and only an explicit `Ready=False` makes its users
+  wait.
+- **Changes to a broker's admin Secret or CA bundle are picked up at the next
+  poll** (ten minutes by default), not at once: the operator watches the broker
+  object and the binding Secrets, not the Secrets a broker names. A changed
+  broker spec is seen at once.
+- **ACL topics may use the plugin's `%c` and `%u` substitutions.** They stay
+  under the tenant root, so they cannot reach another tenant's topics.
+- **A broker that does not answer holds up other users for the connect timeout
+  (ten seconds).** The controller runs one worker unless
+  `--max-concurrent-reconciles` is raised, and the connection cache connects with
+  its lock held, so even with a raised value every reconcile that needs the
+  cache waits for a broker that is being connected. The cache is safe for
+  concurrent reconciles: a connection that is replaced while a reconcile uses it
+  is closed when that reconcile ends, and a timer (checking every five minutes)
+  closes the connections nobody has used for ten minutes, so one can stay open
+  for up to fifteen.
+- **Two rotations within one grace period** reuse the login that the first one
+  was still retiring, so its password changes then; the active login is never
+  reset.
+- **The same topic with Publish and Subscribe is refused by the webhook,**
+  as one duplicate; use `PublishSubscribe`.
+
+## Follow-ups
+
+- **NOX-fin (question):** when a claim that issued a create is deleted and its
+  broker, or the broker's admin Secret, is already gone, the operator passes the
+  resolve error to the framework (`lifecycle.Options.ResolveErr`) with no
+  `External`. Confirm in lib-operator-go that this still releases the finalizer
+  (or defines what is shown), and align all operators on it.
 
 ## Install
 

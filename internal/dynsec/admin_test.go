@@ -2,6 +2,7 @@ package dynsec
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"strings"
@@ -195,6 +196,31 @@ func TestConnectVerifiesTheCertificate(t *testing.T) {
 		t.Fatalf("verified by name: %v", err)
 	}
 	a.Close()
+}
+
+// ServerName is what the certificate is verified against, whatever address is
+// dialed (the server's tls.serverName), and MinTLS raises the floor.
+func TestConnectServerNameAndMinTLS(t *testing.T) {
+	named := newFakeBroker(t, behavior{sans: []string{"broker.example"}}, echo)
+	cfg := named.config()
+	cfg.ServerName = "broker.example"
+	cfg.MinTLS = tls.VersionTLS13
+	a, err := Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("verified against ServerName: %v", err)
+	}
+	a.Close()
+
+	cfg.ServerName = "other.example"
+	if _, err := Connect(context.Background(), cfg); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("wrong ServerName: %v", err)
+	}
+	if got := (Config{MinTLS: tls.VersionTLS10}).withDefaults().MinTLS; got != tls.VersionTLS12 {
+		t.Errorf("a lower MinTLS gave %#x", got)
+	}
+	if got := (Config{MinTLS: tls.VersionTLS13}).withDefaults().MinTLS; got != tls.VersionTLS13 {
+		t.Errorf("MinTLS = %#x", got)
+	}
 }
 
 func TestCommandFailures(t *testing.T) {

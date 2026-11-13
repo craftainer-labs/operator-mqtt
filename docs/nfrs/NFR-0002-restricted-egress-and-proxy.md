@@ -2,11 +2,7 @@
 
 ## Status
 
-Accepted
-
-The dialer and its policy are implemented (`internal/egress`, used by the dynsec
-client). The webhook rules and the fixed condition texts below arrive with the
-controller (NO4b-2), which moves this to Implemented.
+Implemented
 
 ## Attribute
 
@@ -64,5 +60,15 @@ tables of both modes and the dialers; `TestConnectThroughEgressPolicy`
 (`internal/dynsec`, against an in-process broker) and
 `TestConnectThroughTheEgressPolicy` (`test/integration`, against the real broker)
 show a connection to a loopback or private broker refused through the strict
-policy. The webhook, condition-text and environment-variable tests are listed
-here when the controller lands.
+policy. `TestMqttBrokerValidator`, `TestClusterMqttBrokerValidator` and
+`TestBrokerErrorsDoNotEchoTheValues` (`internal/webhook/v1alpha1`) show that a
+host with a scheme, a port or userinfo, and a proxy URL with credentials, are
+refused without echoing the value. `TestControllerSettings` and
+`TestRunRejectsInvalidSettings` (`internal/app`) cover `EGRESS_MODE`: its
+default, `allow-private`, the flag over the environment, and a wrong value
+stopping startup before a cluster is contacted. `TestCoarse`,
+`TestUserFailuresAreCoarse` and `TestUserOnAnUnusableBroker`
+(`internal/controller`) show that each failed connection reaches the conditions
+and Events as its one fixed text and that the raw error, an address or a
+credential, does not. The chart's `values.schema.json` accepts only the two
+modes.

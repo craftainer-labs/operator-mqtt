@@ -80,6 +80,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(SetupClusterMqttBrokerWebhookWithManager(mgr)).To(Succeed())
 	Expect(SetupMqttBrokerWebhookWithManager(mgr)).To(Succeed())
+	Expect(SetupMqttUserWebhookWithManager(mgr)).To(Succeed())
 
 	go func() {
 		defer GinkgoRecover()

@@ -125,6 +125,26 @@ manager:
   #   labels: {}
   #   annotations: {}
 
+## Which destinations the operator's connections to MQTT brokers (and their
+## proxies) may not reach. The operator dials every broker itself, so this is its
+## SSRF guard.
+## - strict (default): loopback, link-local, cloud metadata and the private
+##   ranges (RFC 1918, CGNAT, unique-local) are refused.
+## - allow-private: the private ranges are allowed; loopback, link-local and
+##   cloud metadata stay refused. Choose it when a broker (such as an in-cluster
+##   Mosquitto Service) or a proxy lives on a private address, which is the usual
+##   case inside a cluster.
+## Rendered as the manager's EGRESS_MODE.
+##
+egressMode: strict
+
+## The deletionPolicy a new data kind is pinned to when its spec leaves it unset:
+## Retain (default) or Delete. Rendered as the manager's
+## DEFAULT_DATA_DELETION_POLICY. MqttUser is a credential kind and has no
+## deletionPolicy, so the value only matters for kinds a later release adds.
+##
+defaultDataDeletionPolicy: Retain
+
 ## RBAC configuration
 ##
 rbac:

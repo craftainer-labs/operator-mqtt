@@ -1,10 +1,5 @@
 package v1alpha1
 
-import (
-	"net"
-	"strconv"
-)
-
 // Protocol is how the operator reaches the broker. TLS is required, so plain
 // mqtt and ws are not offered.
 //
@@ -88,9 +83,5 @@ func (c *BrokerConfig) Endpoint() string {
 	if protocol == "" {
 		protocol = ProtocolMQTTS
 	}
-	port := DefaultPort
-	if c.Port != nil {
-		port = *c.Port
-	}
-	return string(protocol) + "://" + net.JoinHostPort(c.Host, strconv.Itoa(int(port)))
+	return string(protocol) + "://" + c.Address()
 }

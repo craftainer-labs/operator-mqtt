@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -120,4 +121,57 @@ func TestMqttUserAccessors(t *testing.T) {
 	g.Expect(u.GetRotationStatus()).To(Equal(common.RotationStatus{}))
 	u.SetRotationStatus(common.RotationStatus{Active: "g1", Sequence: 2})
 	g.Expect(u.GetRotationStatus()).To(Equal(common.RotationStatus{Active: "g1", Sequence: 2}))
+}
+
+func TestAddressAndRoot(t *testing.T) {
+	g := NewWithT(t)
+	port := int32(443)
+	g.Expect((&BrokerConfig{Host: "broker"}).Address()).To(Equal("broker:8883"))
+	g.Expect((&BrokerConfig{Host: "fd00::7", Port: &port}).Address()).To(Equal("[fd00::7]:443"))
+
+	g.Expect((&BrokerConfig{}).Root("team-a")).To(Equal("team-a/"))
+	g.Expect((&BrokerConfig{TopicRoot: "tenants/{namespace}/mqtt/"}).Root("team-a")).To(Equal("tenants/team-a/mqtt/"))
+	g.Expect((&BrokerConfig{TopicRoot: "shared/"}).Root("team-a")).To(Equal("shared/"))
+}
+
+func TestKindConstantsAreRegisteredKinds(t *testing.T) {
+	g := NewWithT(t)
+	s := runtime.NewScheme()
+	g.Expect(AddToScheme(s)).To(Succeed())
+	for _, kind := range []string{KindClusterMqttBroker, KindMqttBroker, KindMqttUser} {
+		g.Expect(s.Recognizes(GroupVersion.WithKind(kind))).To(BeTrue(), kind)
+	}
+}
+
+func TestTopicProblem(t *testing.T) {
+	g := NewWithT(t)
+	for _, ok := range []string{
+		"#", "a", "a/b", "sensors/+/telemetry", "commands/#", "+", "+/+", "a/+/b/#", "with space", "%u/x", "ünï/cødé",
+	} {
+		g.Expect(TopicProblem(ok)).To(BeEmpty(), ok)
+	}
+	for _, tc := range []struct{ topic, want string }{
+		{"", "must not be empty"},
+		{strings.Repeat("a", 257), "at most 256"},
+		{"a/\xffb", "UTF-8"},
+		{"a\x00b", "control characters"},
+		{"a\tb", "control characters"},
+		{"/a", "start with /"},
+		{"$SYS/x", "start with $"},
+		{"a/../b", ".."},
+		{"a//b", "empty level"},
+		{"a/", "empty level"},
+		{"a/{namespace}", "{ or }"},
+		{"a/b}", "{ or }"},
+		{"a#", "# must be"},
+		{"#/a", "# must be"},
+		{"a/#/#", "# must be"},
+		{"a/b#", "# must be"},
+		{"a+", "+ must be"},
+		{"a/b+/c", "+ must be"},
+	} {
+		g.Expect(TopicProblem(tc.topic)).To(ContainSubstring(tc.want), tc.topic)
+	}
+	// The limit counts characters, not bytes.
+	g.Expect(TopicProblem(strings.Repeat("é", 256))).To(BeEmpty())
 }
