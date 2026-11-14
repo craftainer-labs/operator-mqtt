@@ -40,6 +40,12 @@ type behavior struct {
 	noise              bool // before each answer, send two messages that are not answers
 	noQoS1             bool // CONNACK says the maximum QoS is 0, so a QoS 1 publish is refused by the client
 
+	// sysVersion, when set, is the retained $SYS/broker/version the broker
+	// sends to a client that subscribes to it; sysSuback is the SUBACK reason
+	// code for that subscription.
+	sysVersion string
+	sysSuback  byte
+
 	// sans are the names of the server certificate; default localhost and
 	// 127.0.0.1.
 	sans []string
@@ -186,9 +192,16 @@ func (fb *fakeBroker) serve(c net.Conn) {
 				return
 			}
 		case *packets.Subscribe:
+			reason, sys := fb.b.suback, p.Subscriptions[0].Topic == VersionTopic
+			if sys {
+				reason = fb.b.sysSuback
+			}
 			ack := packets.NewControlPacket(packets.SUBACK)
-			ack.Content = &packets.Suback{PacketID: p.PacketID, Reasons: []byte{fb.b.suback}}
+			ack.Content = &packets.Suback{PacketID: p.PacketID, Reasons: []byte{reason}}
 			write(c, ack)
+			if sys && reason < 0x80 && fb.b.sysVersion != "" {
+				fb.send(c, VersionTopic, []byte(fb.b.sysVersion))
+			}
 		case *packets.Publish:
 			if !fb.publish(c, p) {
 				return

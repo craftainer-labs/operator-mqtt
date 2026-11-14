@@ -173,13 +173,9 @@ func (c Config) backend(ctx context.Context, ns string, ref common.ServerRef) (*
 	if err != nil {
 		return nil, coarse(ctx, "build the dialer", fmt.Errorf("%w: %w", server.ErrInvalidServer, err))
 	}
-	user, pass := conn.Admin[AdminUsernameKey], conn.Admin[AdminPasswordKey]
-	if len(user) == 0 || len(pass) == 0 {
-		return nil, coarse(ctx, "read the admin Secret", fmt.Errorf("%w: %w", server.ErrInvalidServer, ErrAdminCredentials))
-	}
-	cfg := dynsec.Config{
-		Address: obj.spec.Address(), CA: conn.CABundle, ServerName: conn.ServerName, MinTLS: conn.MinTLSVersion,
-		Username: string(user), Password: string(pass), ControlTopic: obj.spec.ControlTopic, Dial: dial,
+	cfg, err := adminConfig(obj.spec, conn, dial)
+	if err != nil {
+		return nil, coarse(ctx, "read the admin Secret", err)
 	}
 	version := stamp(obj, cfg, conn.Proxy)
 	b := &backend{spec: obj.spec, conn: conn, host: obj.spec.Host}
@@ -197,6 +193,20 @@ func (c Config) backend(ctx context.Context, ns string, ref common.ServerRef) (*
 		return br, nil
 	}
 	return b, nil
+}
+
+// adminConfig is the connection to a broker: its address and control topic, the
+// admin login of conn and the TLS settings. The claims' reconcilers and the
+// health probe both build theirs here.
+func adminConfig(spec mqttv1alpha1.BrokerConfig, conn server.Connection, dial egress.DialFunc) (dynsec.Config, error) {
+	user, pass := conn.Admin[AdminUsernameKey], conn.Admin[AdminPasswordKey]
+	if len(user) == 0 || len(pass) == 0 {
+		return dynsec.Config{}, fmt.Errorf("%w: %w", server.ErrInvalidServer, ErrAdminCredentials)
+	}
+	return dynsec.Config{
+		Address: spec.Address(), CA: conn.CABundle, ServerName: conn.ServerName, MinTLS: conn.MinTLSVersion,
+		Username: string(user), Password: string(pass), ControlTopic: spec.ControlTopic, Dial: dial,
+	}, nil
 }
 
 // fetchBroker reads the broker's own fields, which server.Connection does not

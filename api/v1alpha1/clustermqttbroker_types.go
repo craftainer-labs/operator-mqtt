@@ -57,6 +57,9 @@ type ClusterMqttBrokerList struct {
 // GetCommon returns the settings every server kind shares.
 func (s *ClusterMqttBroker) GetCommon() *common.ServerCommon { return &s.Spec.ServerCommon }
 
+// GetServerStatus returns the status the probe writes (probe.Server).
+func (s *ClusterMqttBroker) GetServerStatus() *common.ServerStatus { return &s.Status }
+
 // GetEndpoint returns the broker's URL, scheme://host:port.
 func (s *ClusterMqttBroker) GetEndpoint() string { return s.Spec.Endpoint() }
 

@@ -110,6 +110,9 @@ type Admin struct {
 
 	mu      sync.Mutex
 	pending map[string]chan reply
+	// version receives the retained $SYS/broker/version while BrokerVersion
+	// waits for it.
+	version chan string
 
 	closeOnce sync.Once
 }
@@ -233,6 +236,16 @@ func (a *Admin) Alive() bool {
 // it. Answers for other requests (another admin's, or one that has timed out)
 // and payloads that are not JSON are dropped.
 func (a *Admin) onPublish(pr paho.PublishReceived) (bool, error) {
+	if pr.Packet.Topic == VersionTopic {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.version != nil {
+			// One slot, and nil once it is served, so this never blocks.
+			a.version <- string(pr.Packet.Payload)
+			a.version = nil
+		}
+		return true, nil
+	}
 	if pr.Packet.Topic != a.response {
 		return false, nil
 	}
