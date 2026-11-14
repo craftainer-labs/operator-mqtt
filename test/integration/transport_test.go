@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,4 +108,44 @@ func TestConcurrentCommands(t *testing.T) {
 	for range 20 {
 		must(t, "GetRole", <-errs)
 	}
+}
+
+// The health probe is one connection of its own: it reads the plugin and
+// Mosquitto's version over the verified connection, and a failed one names a
+// kind of error, never the host or the password.
+func TestProbe(t *testing.T) {
+	b := load(t)
+
+	got, err := dynsec.Probe(bg, b.config())
+	must(t, "Probe", err)
+	if !strings.HasPrefix(got, "2.") || strings.ContainsAny(got, " \t\n") {
+		t.Errorf("version = %q, want the bare Mosquitto version", got)
+	}
+	t.Logf("Mosquitto reports version %q", got)
+
+	// A wrong password and an unknown admin are refused at the login; the
+	// error leaks neither the password nor the host.
+	for what, mutate := range map[string]func(*dynsec.Config){
+		"wrong password": func(c *dynsec.Config) { c.Password = "not-the-password" },
+		"unknown admin":  func(c *dynsec.Config) { c.Username = name("no-admin") },
+	} {
+		cfg := b.config()
+		mutate(&cfg)
+		_, err := dynsec.Probe(bg, cfg)
+		if !errors.Is(err, dynsec.ErrAuth) {
+			t.Fatalf("%s: %v, want ErrAuth", what, err)
+		}
+		host, _, _ := net.SplitHostPort(b.address)
+		for _, secret := range []string{"not-the-password", b.password, host} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("%s: the error leaks %q: %v", what, secret, err)
+			}
+		}
+	}
+
+	// The certificate is verified for the probe as for every other call.
+	cfg := b.config()
+	cfg.CA = nil
+	_, err = dynsec.Probe(bg, cfg)
+	wantErr(t, "no CA bundle", err, dynsec.ErrUnavailable)
 }

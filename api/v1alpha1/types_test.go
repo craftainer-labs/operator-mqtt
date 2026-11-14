@@ -60,6 +60,8 @@ func TestMqttBrokerAccessors(t *testing.T) {
 	g.Expect(b.GetCommon().ProxyURL).To(Equal("http://proxy:3128"))
 	g.Expect(b.GetEndpoint()).To(Equal("mqtts://broker:8883"))
 	g.Expect(b.GetAllowedNamespaces()).To(BeNil())
+	b.GetServerStatus().ServerVersion = "2.0.22"
+	g.Expect(b.Status.ServerVersion).To(Equal("2.0.22"))
 }
 
 func TestClusterMqttBrokerAccessors(t *testing.T) {
@@ -72,6 +74,8 @@ func TestClusterMqttBrokerAccessors(t *testing.T) {
 	g.Expect(b.GetCommon().ProxyURL).To(Equal("http://proxy:3128"))
 	g.Expect(b.GetEndpoint()).To(Equal("mqtts://broker:8883"))
 	g.Expect(b.GetAllowedNamespaces().From).To(Equal(common.NamespacesAll))
+	b.GetServerStatus().ServerVersion = "2.0.22"
+	g.Expect(b.Status.ServerVersion).To(Equal("2.0.22"))
 }
 
 func TestMqttUserAccessors(t *testing.T) {

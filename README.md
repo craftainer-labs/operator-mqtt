@@ -122,6 +122,60 @@ This is the rule every Craftainer operator follows when a claim is deleted:
 3. The operator does not look at a broker's `Ready` condition to delete; it
    connects whenever the claim issued a create.
 
+### Server health
+
+`ClusterMqttBroker` and `MqttBroker` get the `ServerStatus` their CRDs promise
+from one `probe.Reconciler` of `lib-operator-go` (`pkg/probe`) per kind, wired
+in `internal/app`:
+
+- **What is probed:** one Dynamic Security request, `getDefaultACLAccess` (the
+  cheapest read of the plugin), sent as the admin over verified TLS. An answer
+  proves both things the status promises: the broker is reachable and it accepts
+  the admin login (and its role holds the control topic).
+- **The version** is Mosquitto's retained `$SYS/broker/version` topic
+  ("mosquitto version 2.0.22", of which `2.0.22` is kept, at most 64 bytes). The
+  Dynamic Security plugin has no version command, so this is the cheap source: the
+  admin that `mosquitto_ctrl dynsec init` creates may subscribe to `$SYS/#`, and
+  Mosquitto publishes the topic when `sys_interval` is above zero (its default is
+  10 seconds). A broker that does not publish it, or an admin that may not read it,
+  leaves `status.serverVersion` empty and the broker is still `Ready` and
+  reachable: reachability and accepted credentials are what the conditions say.
+  The wait for the retained message is at most two seconds.
+- `status.lastProbeTime`: the last probe that ran and whose result was recorded
+  (a broker that cannot be probed, `InvalidServer`, has none). It is rewritten
+  when the result changes and otherwise every 10 minutes, so a healthy fleet does
+  not write one status per broker per minute.
+- `Ready` and `ServerReachable` are `True` (reason `Available`) when the probe
+  succeeded, and `False` with reason `ServerUnreachable` when it did not
+  (unreachable, TLS failure, refused login, or a failed request). A broker whose
+  admin Secret is in a forbidden namespace is `AdminSecretNamespaceForbidden`; one
+  whose connection settings are missing or invalid (an absent Secret or CA
+  ConfigMap, a bad proxy URL, no `username` and `password`, `protocol: wss`) is
+  `Ready=False` with `ServerReachable=Unknown` and reason `InvalidServer`. A
+  broker that is `Ready=False` makes its users wait (see the deletion rule for
+  the exception). The status never shows why a call failed; the operator log has
+  a fixed text per category (egress policy, TLS, login, timeout, other), once per
+  change, with no address, login or password.
+- A probe runs every `spec.healthCheckInterval` (default one minute, plus up to
+  10% jitter), whether the last one succeeded or not; a broker is also probed at
+  once when it is created or its spec changes. A probe is bounded to 30 seconds.
+- The probe connects exactly as the claims do: the egress policy, the broker's
+  TLS settings (its CA bundle, `tls.serverName`, minimum version) and proxy, as the
+  admin user, with the settings built by the same helper. It makes **a fresh,
+  short-lived connection of its own** and disconnects on every path; it never
+  takes a connection from the claims' reference-counted cache or puts one there,
+  so a probe can neither pin nor evict a cached connection.
+- RBAC: `get`, `list` and `watch` on Secrets and ConfigMaps, and `get`, `update`
+  and `patch` on the brokers' `status`, in the chart role.
+- Caches: the manager's Secret and ConfigMap caches keep only the objects with the
+  `managed-by` label (so the operator does not hold every Secret or ConfigMap in
+  memory), and the probe reads the admin Secret and the CA bundle live, not from
+  the cache, so every probe sees the current object. A change to an unlabelled
+  admin Secret, CA Secret or CA ConfigMap does not trigger a probe at once; it is
+  picked up at the next probe interval (one minute by default). Do not widen
+  either cache for that: it costs memory and widens exposure for a latency gain of
+  at most one interval.
+
 ## Known limits
 
 What the broker client (`internal/dynsec`) and the `MqttUser` controller do and
@@ -165,10 +219,6 @@ do not do.
 
 - **`wss` is refused.** A broker with `protocol: wss` makes its users fail with
   "the broker's protocol is not supported" until the client speaks it.
-- **The broker's health is not probed yet.** Nothing writes a broker's `Ready`
-  condition (a server probe follows the lib-operator-go release), so a broker with
-  no `Ready` condition is used and only an explicit `Ready=False` makes its users
-  wait.
 - **Changes to a broker's admin Secret or CA bundle are picked up at the next
   poll** (ten minutes by default), not at once: the operator watches the broker
   object and the binding Secrets, not the Secrets a broker names. A changed

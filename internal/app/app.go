@@ -20,6 +20,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -36,6 +37,7 @@ import (
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
 	"github.com/craftainer-labs/lib-operator-go/pkg/binding"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
+	"github.com/craftainer-labs/lib-operator-go/pkg/probe"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
@@ -231,11 +233,13 @@ func (s *settings) managerOptions(opts []Option) ctrl.Options {
 		// Lease on cancel is safe and makes a rollout faster.
 		LeaderElectionReleaseOnCancel: true,
 		// The Secret cache holds only the binding Secrets (the operator's
-		// managed-by label), so the operator does not keep every Secret of the
-		// cluster in memory. The admin Secrets and CA bundles of brokers, and
-		// binding Secrets that carry no label yet, are read from the API server
-		// on demand: the client bypasses the cache for Secrets and ConfigMaps.
-		Cache: cache.Options{ByObject: binding.CacheByObject(EventRecorderName)},
+		// managed-by label), and the ConfigMap cache (the probes' watches) only
+		// the ConfigMaps with the same label, so the operator does not keep or
+		// watch every Secret and ConfigMap of the cluster. The admin Secrets and
+		// CA bundles of brokers, and binding Secrets that carry no label yet, are
+		// read from the API server on demand: the client bypasses the cache for
+		// Secrets and ConfigMaps.
+		Cache: cache.Options{ByObject: cacheByObject()},
 		Client: client.Options{Cache: &client.CacheOptions{
 			DisableFor: []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}},
 		}},
@@ -311,14 +315,17 @@ type setupStep struct {
 // controller reads and writes besides them. The ClusterRole lists exact
 // resources and verbs. Secrets are the binding Secrets it writes and the admin
 // Secrets and CA bundles it reads; namespaced brokers keep theirs in tenant
-// namespaces, so the rule cannot be narrowed by namespace (NFR-0004).
+// namespaces, so the rule cannot be narrowed by namespace (NFR-0004). The
+// broker probes (probe.Reconciler) also watch Secrets and ConfigMaps, so
+// ConfigMaps need list and watch too; both caches are restricted to the
+// managed-by label.
 //
 // +kubebuilder:rbac:groups=mqtt.craftainer.dev,resources=clustermqttbrokers;mqttbrokers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=mqtt.craftainer.dev,resources=mqttusers,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=mqtt.craftainer.dev,resources=clustermqttbrokers/status;mqttbrokers/status;mqttusers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mqtt.craftainer.dev,resources=mqttusers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
-// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core;events.k8s.io,resources=events,verbs=create;patch
 
@@ -350,9 +357,37 @@ func setup(mgr ctrl.Manager, webhooks bool, cs controllerSettings) error {
 		Egress: cs.egress, Connect: controller.ConnectAdmin, Cache: conns,
 		MaxConcurrentReconciles: cs.maxConcurrent,
 	}
-	steps = append(steps, setupStep{"MqttUser controller", (&controller.UserReconciler{Config: cfg}).SetupWithManager})
+	steps = append(steps,
+		setupStep{"MqttUser controller", (&controller.UserReconciler{Config: cfg}).SetupWithManager},
+		setupStep{"ClusterMqttBroker probe", brokerProbe(mgr, cfg, cs.namespace,
+			func() probe.Server { return &mqttv1alpha1.ClusterMqttBroker{} })},
+		setupStep{"MqttBroker probe", brokerProbe(mgr, cfg, cs.namespace,
+			func() probe.Server { return &mqttv1alpha1.MqttBroker{} })})
 	// +kubebuilder:scaffold:builder
 	return runSteps(mgr, steps)
+}
+
+// cacheByObject restricts the Secret and the ConfigMap cache to the objects
+// that carry the operator's managed-by label.
+func cacheByObject() map[client.Object]cache.ByObject {
+	byObject := binding.CacheByObject(EventRecorderName)
+	byObject[&corev1.ConfigMap{}] = cache.ByObject{
+		Label: labels.SelectorFromSet(labels.Set{binding.LabelManagedBy: EventRecorderName}),
+	}
+	return byObject
+}
+
+// brokerProbe returns the setup of the probe.Reconciler of one broker kind,
+// which writes the kind's status (serverVersion, lastProbeTime, Ready and
+// ServerReachable) from a Dynamic Security request over a connection of its
+// own. Its Client reads Secrets and ConfigMaps live (managerOptions), and its
+// watches on them go through the manager's caches, which hold only the
+// managed-by labelled ones.
+func brokerProbe(mgr ctrl.Manager, cfg controller.Config, operatorNS string, kind func() probe.Server) func(ctrl.Manager) error {
+	return (&probe.Reconciler{
+		Client: mgr.GetClient(), New: kind, Prober: controller.Prober{Config: cfg},
+		Options: probe.Options{OperatorNamespace: operatorNS},
+	}).SetupWithManager
 }
 
 func runSteps(mgr ctrl.Manager, steps []setupStep) error {

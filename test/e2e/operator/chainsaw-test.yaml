@@ -539,6 +539,38 @@ spec:
                 controlTopic: $CONTROL/dynamic-security/v1
                 topicRoot: '{namespace}/'
 
+    - name: the brokers report their own status
+      # The probe writes this, so a claim becoming Ready is no longer the
+      # evidence that a broker is: assert it on the brokers themselves.
+      # serverVersion is deliberately not asserted: it is a best-effort read
+      # of the retained $SYS/broker/version (2 s cap), and an empty version
+      # still counts as Ready, so asserting it would make CI timing-dependent.
+      try:
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: ClusterMqttBroker
+              metadata:
+                name: e2e-mqtt
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+                (conditions[?type == 'ServerReachable'] | [0].status): "True"
+                (conditions[?type == 'ServerReachable'] | [0].reason): Available
+                (lastProbeTime != null): true
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: mqtt.craftainer.dev/v1alpha1
+              kind: MqttBroker
+              metadata:
+                name: team-mqtt
+              status:
+                (conditions[?type == 'Ready'] | [0].status): "True"
+                (conditions[?type == 'ServerReachable'] | [0].status): "True"
+                (conditions[?type == 'ServerReachable'] | [0].reason): Available
+                (lastProbeTime != null): true
+
     - name: MqttUsers are created and become ready
       try:
         - apply:
