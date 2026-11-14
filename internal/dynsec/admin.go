@@ -241,8 +241,13 @@ func (a *Admin) onPublish(pr paho.PublishReceived) (bool, error) {
 		defer a.mu.Unlock()
 		if a.version != nil {
 			// One slot, and nil once it is served, so this never blocks.
-			// Copy at most what cleanVersion could keep, not the whole payload.
-			a.version <- string(pr.Packet.Payload[:min(len(pr.Packet.Payload), maxVersionPayload)])
+			// A payload longer than any version is not one: pass "" (no version)
+			// rather than copying it, or a truncated part of it, into the status.
+			v := ""
+			if len(pr.Packet.Payload) <= maxVersionPayload {
+				v = string(pr.Packet.Payload)
+			}
+			a.version <- v
 			a.version = nil
 		}
 		return true, nil
