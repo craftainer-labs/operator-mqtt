@@ -20,7 +20,7 @@ import (
 func probeFixture(version string, err error) (Prober, *[]dynsec.Config) {
 	var cfgs []dynsec.Config
 	p := Prober{Config: Config{Egress: egress.NewPolicy(egress.ModeStrict)}}
-	p.Probe = func(_ context.Context, c dynsec.Config) (string, error) {
+	p.Check = func(_ context.Context, c dynsec.Config) (string, error) {
 		cfgs = append(cfgs, c)
 		return version, err
 	}

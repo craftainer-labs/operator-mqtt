@@ -31,8 +31,8 @@ type ProbeFunc func(ctx context.Context, cfg dynsec.Config) (string, error)
 // failure, never the address, the login or the broker's own words.
 type Prober struct {
 	Config Config
-	// Probe is the probe connection; nil means dynsec.Probe.
-	Probe ProbeFunc
+	// Check is the probe connection; nil means dynsec.Probe.
+	Check ProbeFunc
 }
 
 var _ probe.Prober = Prober{}
@@ -55,7 +55,7 @@ func (p Prober) Probe(ctx context.Context, srv server.Server, conn server.Connec
 	if err != nil {
 		return "", categoryOnly(err)
 	}
-	run := p.Probe
+	run := p.Check
 	if run == nil {
 		run = dynsec.Probe
 	}
