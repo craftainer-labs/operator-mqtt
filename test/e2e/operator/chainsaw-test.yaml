@@ -541,9 +541,10 @@ spec:
 
     - name: the brokers report their own status
       # The probe writes this, so a claim becoming Ready is no longer the
-      # evidence that a broker is: assert it on the brokers themselves. The
-      # version is Mosquitto's retained $SYS/broker/version, which the admin
-      # role of `mosquitto_ctrl dynsec init` may read.
+      # evidence that a broker is: assert it on the brokers themselves.
+      # serverVersion is deliberately not asserted: it is a best-effort read
+      # of the retained $SYS/broker/version (2 s cap), and an empty version
+      # still counts as Ready, so asserting it would make CI timing-dependent.
       try:
         - assert:
             timeout: 3m
@@ -556,7 +557,6 @@ spec:
                 (conditions[?type == 'Ready'] | [0].status): "True"
                 (conditions[?type == 'ServerReachable'] | [0].status): "True"
                 (conditions[?type == 'ServerReachable'] | [0].reason): Available
-                (length(serverVersion) > `0`): true
                 (lastProbeTime != null): true
         - assert:
             timeout: 3m
@@ -569,7 +569,6 @@ spec:
                 (conditions[?type == 'Ready'] | [0].status): "True"
                 (conditions[?type == 'ServerReachable'] | [0].status): "True"
                 (conditions[?type == 'ServerReachable'] | [0].reason): Available
-                (length(serverVersion) > `0`): true
                 (lastProbeTime != null): true
 
     - name: MqttUsers are created and become ready

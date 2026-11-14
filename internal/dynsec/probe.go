@@ -14,13 +14,17 @@ import (
 const VersionTopic = "$SYS/broker/version"
 
 const (
-	// versionWait is how long the probe waits for the retained version after
-	// the broker accepted the subscription. A broker that never publishes one
+	// versionWait is how long the probe allows for the SUBSCRIBE and the
+	// retained version together, counted from the SUBSCRIBE. A broker that never publishes one
 	// (sys_interval 0) costs one probe this much, and the version stays empty.
 	versionWait = 2 * time.Second
 
 	// maxVersion bounds what is kept of the version text.
 	maxVersion = 64
+
+	// maxVersionPayload bounds how much of a published payload is copied
+	// before it is cleaned: the prefix and the version, with room to spare.
+	maxVersionPayload = 256
 
 	// versionPrefix is how Mosquitto words its version.
 	versionPrefix = "mosquitto version "
