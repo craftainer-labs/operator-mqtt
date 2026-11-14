@@ -152,7 +152,9 @@ func TestProberDefaultsToDynsecProbe(t *testing.T) {
 	srv := &mqttv1alpha1.MqttBroker{}
 	srv.Spec.Host = "127.0.0.1"
 	p := Prober{Config: Config{Egress: egress.NewPolicy(egress.ModeStrict)}}
-	_, err := p.Probe(context.Background(), srv, probeConn())
+	conn := probeConn()
+	conn.CABundle = nil // the system roots: a fake bundle is refused before any dial
+	_, err := p.Probe(context.Background(), srv, conn)
 	if !errors.Is(err, egress.ErrBlocked) || strings.Contains(err.Error(), "127.0.0.1") {
 		t.Errorf("default probe: %v", err)
 	}

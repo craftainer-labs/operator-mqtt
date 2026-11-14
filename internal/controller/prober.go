@@ -91,4 +91,3 @@ func brokerConfigOf(srv server.Server) (mqttv1alpha1.BrokerConfig, error) {
 	}
 	return mqttv1alpha1.BrokerConfig{}, fmt.Errorf("%w: %T", server.ErrUnknownServerKind, srv)
 }
-
