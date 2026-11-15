@@ -19,12 +19,12 @@ import (
 
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
 	"github.com/craftainer-labs/lib-operator-go/pkg/conditions"
+	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
-	"github.com/craftainer-labs/operator-mqtt/internal/egress"
 )
 
 func TestBrokerCache(t *testing.T) {
