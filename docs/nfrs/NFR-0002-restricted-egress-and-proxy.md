@@ -54,10 +54,10 @@ review); plan rows EB-3 and EB-5;
 ## Verification
 
 The range tables of both modes and the dialers are covered where the policy lives, in
-lib-operator-go `pkg/egress` (`TestPolicyCheckRegistryRows`, `TestControl`,
+lib-operator-go `pkg/egress`, v0.3.0 or newer (`TestPolicyCheckRegistryRows`, `TestControl`,
 `TestDirectDialIsCheckedAfterResolution`, `TestHTTPProxyTunnel`, `TestSOCKS5ChecksTheDestination`,
 `TestCheckTarget`, `TestProxyUserinfoAndScheme`, `TestHostDialerResolvesBeforeTheProxy`).
-`TestConnectThroughEgressPolicy`
+In this repository, `TestConnectThroughEgressPolicy`
 (`internal/dynsec`, against an in-process broker) and
 `TestConnectThroughTheEgressPolicy` (`test/integration`, against the real broker)
 show a connection to a loopback or private broker refused through the strict
