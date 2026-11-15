@@ -4,11 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 )
 
 // shortConfig is a Config with a timeout short enough for the tests that wait
