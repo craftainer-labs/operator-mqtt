@@ -24,11 +24,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
+	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/lib-operator-go/pkg/testenv"
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
-	"github.com/craftainer-labs/operator-mqtt/internal/egress"
 )
 
 // The reconcile flow runs against envtest's kube-apiserver with an in-memory

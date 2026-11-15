@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
-	"github.com/craftainer-labs/operator-mqtt/internal/egress"
 )
 
 func TestConnectErrors(t *testing.T) {

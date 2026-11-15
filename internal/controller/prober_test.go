@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
-	"github.com/craftainer-labs/operator-mqtt/internal/egress"
 )
 
 // probeFixture is a Prober whose probe connection is a fake that records the
