@@ -314,6 +314,9 @@ func TestCommandFailures(t *testing.T) {
 		for a.Alive() && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
+		if a.Alive() {
+			t.Fatal("the connection never closed")
+		}
 		if err := a.DeleteClient(context.Background(), "u"); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("err = %v", err)
 		}
