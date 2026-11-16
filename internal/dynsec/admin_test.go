@@ -304,6 +304,32 @@ func TestCommandFailures(t *testing.T) {
 			t.Error("Alive after the broker closed the connection")
 		}
 	})
+	t.Run("connection already closed when the command starts", func(t *testing.T) {
+		// do's check of Alive after the publish: the connection is known
+		// dead before the command, so this branch is taken every time.
+		fb := newFakeBroker(t, behavior{closeAfterPuback: true}, echo)
+		a := connect(t, fb)
+		_ = a.DeleteClient(context.Background(), "u")
+		deadline := time.Now().Add(2 * time.Second)
+		for a.Alive() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if a.Alive() {
+			t.Fatal("the connection never closed")
+		}
+		if err := a.DeleteClient(context.Background(), "u"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("connection closed while waiting for the answer", func(t *testing.T) {
+		// The broker closes 200 ms after the PUBACK, so the client is
+		// always in the wait for the answer: the connection-lost case there.
+		fb := newFakeBroker(t, behavior{closeAfterPuback: true, closeLate: true}, echo)
+		a := connect(t, fb)
+		if err := a.DeleteClient(context.Background(), "u"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }
 
 func TestAnswersAreMatchedByCorrelation(t *testing.T) {
