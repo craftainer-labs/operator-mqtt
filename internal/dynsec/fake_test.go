@@ -37,6 +37,7 @@ type behavior struct {
 	mute               bool // read PUBLISH, answer nothing at all
 	closeOnPublish     bool // read PUBLISH, close without a PUBACK
 	closeAfterPuback   bool // PUBACK, then close
+	closeLate          bool // with closeAfterPuback: close only after the client waits for the answer
 	noise              bool // before each answer, send two messages that are not answers
 	noQoS1             bool // CONNACK says the maximum QoS is 0, so a QoS 1 publish is refused by the client
 
@@ -251,6 +252,9 @@ func (fb *fakeBroker) publish(c net.Conn, p *packets.Publish) bool {
 		write(c, ack)
 	}
 	if fb.b.closeAfterPuback {
+		if fb.b.closeLate {
+			time.Sleep(200 * time.Millisecond)
+		}
 		return false
 	}
 	if fb.b.puback >= 0x80 {
