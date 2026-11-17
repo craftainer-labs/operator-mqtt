@@ -35,9 +35,6 @@ var (
 	// ErrUnsupportedProtocol means the broker is reached by a protocol the
 	// client does not speak (wss).
 	ErrUnsupportedProtocol = errors.New("the broker's protocol is not supported")
-	// ErrCloudNotImplemented means the broker has a provider whose backend this
-	// release does not run yet; the health probe still says it.
-	ErrCloudNotImplemented = errors.New("the broker's cloud provider is not supported yet")
 	// ErrPolicyUnmanaged means an IoT policy of the name the claim derives exists
 	// and nothing shows that this claim made it. The operator never adopts,
 	// changes or deletes it.
@@ -97,7 +94,6 @@ func isEgress(err error) bool {
 // kinds they are wrapped in.
 var rules = []rule{
 	{is(lifecycle.ErrNameCollision), "", false},
-	{is(ErrCloudNotImplemented), "", false},
 	{is(ErrPolicyUnmanaged), "", false},
 	{is(ErrBindingNotUsable), "", false},
 	{is(ErrBrokerNotReady), "", false},

@@ -3,12 +3,14 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/craftainer-labs/lib-operator-go/pkg/probe"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
 // ProbeFunc makes one probe connection to a broker and returns its version, or
@@ -38,16 +40,47 @@ type Prober struct {
 var _ probe.CloudProber = Prober{}
 
 // ProbeCloud implements probe.CloudProber: the version of a self-hosted
-// broker. A broker with a provider is not probed yet.
+// broker, or, for a broker with a provider, the account's IoT data endpoint
+// (DescribeEndpoint, iot:Data-ATS) through the same egress policy, proxy and
+// credentials the claims use. Discovered holds the endpoint, the region of the
+// provider block and the MQTT over TLS port; a version is not reported (IoT
+// Core has none). A failure is category-only. The reasons ADR 0002 drafts for
+// a cloud server that the library cannot express yet (NKlib-3) all surface as
+// ServerUnreachable with this coarse message; the operator never writes
+// status itself.
 func (p Prober) ProbeCloud(ctx context.Context, srv server.CloudServer, cc server.CloudConnection) (probe.CloudResult, error) {
 	if _, err := brokerConfigOf(srv); err != nil {
 		return probe.CloudResult{}, err
 	}
 	if hasProvider(srv) {
-		return probe.CloudResult{}, categoryOnly(ErrCloudNotImplemented)
+		return p.probeIoT(ctx, srv, cc)
 	}
 	version, err := p.Probe(ctx, srv, cc.Connection)
 	return probe.CloudResult{Version: version}, err
+}
+
+// probeIoT reads the data endpoint of the broker's AWS account.
+func (p Prober) probeIoT(ctx context.Context, srv server.CloudServer, cc server.CloudConnection) (probe.CloudResult, error) {
+	_, block, _, err := awsOf(srv)
+	if err != nil {
+		return probe.CloudResult{}, categoryOnly(err)
+	}
+	if p.Config.IoT == nil {
+		return probe.CloudResult{}, categoryOnly(fmt.Errorf("%w: no IoT client", server.ErrInvalidServer))
+	}
+	api, err := p.Config.IoT(ctx, srv, cc)
+	if err != nil {
+		return probe.CloudResult{}, categoryOnly(err)
+	}
+	endpoint, err := iotcore.New(api).Endpoint(ctx)
+	if err != nil {
+		return probe.CloudResult{}, categoryOnly(err)
+	}
+	return probe.CloudResult{Discovered: map[string]string{
+		mqttv1alpha1.DiscoveredEndpoint: endpoint,
+		mqttv1alpha1.DiscoveredRegion:   block.Region,
+		discoveredPort:                  strconv.Itoa(iotPort),
+	}}, nil
 }
 
 // hasProvider reports whether a broker of either kind sets spec.provider.

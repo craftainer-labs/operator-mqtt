@@ -63,9 +63,15 @@ binding Secret (type `servicebinding.io/mqtt`, `cloud: aws`) holds `host`,
 endpoint chains to the Amazon Trust Services roots that system trust stores
 carry. `host` is `spec.host` if set, else the endpoint the probe discovered; the
 port is `spec.port`, else a discovered `port`, else 8883. A claim waits (the
-broker is "not Ready") until the endpoint is known. This release's health probe
-does not discover it yet (it still reports `Ready=False`, `ServerUnreachable`),
-so a claim waits until a follow-up lands the probe.
+broker is "not Ready") until the endpoint is known. The health probe finds it:
+it calls `DescribeEndpoint` (`iot:Data-ATS`) with the broker's credentials,
+through the egress policy and the broker's proxy, and records the `endpoint`,
+the provider block's `region` and the `port` (8883) in `status.discovered`. A
+broker with a provider has no Dynamic Security connection and reports no
+version. A probe that fails (the credentials refused, the API unreachable) shows
+a category-only message and reason `ServerUnreachable`; the library cannot yet
+express the finer reasons the drafts name, and the operator never writes status
+itself.
 
 - The private key is returned by AWS once; it is written to the binding Secret
   and nowhere else, never to a log, an Event, a condition or the status.
@@ -456,6 +462,12 @@ go test -tags integration -count=1 ./test/integration/...
 The devcontainer starts that broker (`mosquitto` in
 `.devcontainer/compose.instance.yml`) and CI runs it in
 `.github/workflows/integration.yml`.
+
+The AWS IoT Core backend (`internal/iotcore` and the probe) is tested against
+moto 5.2.5 (build tags `integration iotcore`), in the same workflow; see
+[`test/integration`](test/integration/README.md) and
+[ADR 0004](docs/adrs/0004-aws-iot-core-backend.md) for what moto cannot check.
+CI runs it; nothing in the devcontainer does.
 
 ## Releases
 
