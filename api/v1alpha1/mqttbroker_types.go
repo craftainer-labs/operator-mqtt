@@ -13,7 +13,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.adminCredentialsSecretRef) || !has(self.adminCredentialsSecretRef.namespace)",message="adminCredentialsSecretRef.namespace must not be set: the Secret is in the MqttBroker's namespace"
 // +kubebuilder:validation:XValidation:rule="has(self.provider) ? !has(self.adminCredentialsSecretRef) : has(self.adminCredentialsSecretRef)",message="adminCredentialsSecretRef is required without provider and forbidden with one"
 // +kubebuilder:validation:XValidation:rule="has(self.provider) || (has(self.host) && size(self.host) > 0)",message="host is required without provider"
-// +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider.type == 'AWS'",message="only provider.type AWS is supported"
+// +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider.type in ['AWS', 'Azure']",message="only provider.type AWS and Azure are supported"
 // +kubebuilder:validation:XValidation:rule="!has(self.credentials) || has(self.provider)",message="credentials is allowed only with provider"
 // +kubebuilder:validation:XValidation:rule="!has(self.provider) || has(self.credentials)",message="a namespaced broker with a provider must set credentials with source Secret: it cannot use WorkloadIdentity"
 // +kubebuilder:validation:XValidation:rule="has(self.provider) == has(oldSelf.provider)",message="provider cannot be added or removed: a server cannot move between clouds or between cloud and self-hosted"
@@ -21,7 +21,7 @@ type MqttBrokerSpec struct {
 	common.CloudServerCommon `json:",inline"`
 	BrokerConfig             `json:",inline"`
 
-	// provider says the broker is a managed cloud service (AWS IoT Core). Absent:
+	// provider says the broker is a managed cloud service (AWS IoT Core or Azure Event Grid). Absent:
 	// a self-hosted Mosquitto, as before. With a provider,
 	// adminCredentialsSecretRef is forbidden.
 	// +optional

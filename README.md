@@ -32,11 +32,12 @@ reach another namespace's topics. On a `ClusterMqttBroker` it must contain
 whole topic levels (`#` only last), and reject a leading `/`, `$`, empty levels,
 `..` and braces. The CRD descriptions list every rule.
 
-### Cloud brokers (AWS IoT Core)
+### Cloud brokers (AWS IoT Core and Azure Event Grid)
 
 A broker kind may name a managed service instead of a Mosquitto host: set
 `spec.provider` (`type: AWS`, with `aws.region` and an optional `aws.roleARN`;
-cluster brokers may also set `aws.endpointOverride`, honoured only with
+or `type: Azure`, see below; cluster brokers may also set
+`aws.endpointOverride` or `azure.endpointOverride`, honoured only with
 `--egress-mode=allow-private`, for emulators). The provider block cannot be
 added or removed after creation (a broker cannot move between a cloud and
 self-hosted), and its type is immutable. With a
@@ -102,6 +103,41 @@ itself.
   until someone deletes it.
 - The AWS client is built for each reconcile (a role to assume, or a web
   identity, costs one STS call each time) and dials through the egress policy.
+
+#### Azure Event Grid
+
+`provider.type: Azure` takes `azure.tenantID`, `azure.subscriptionID`,
+`azure.resourceGroup` (both required) and `azure.eventGridNamespace`, the name
+of an Event Grid namespace with MQTT enabled. `credentials.source` is
+`WorkloadIdentity` (cluster brokers only; the ServiceAccount carries
+`azure.workload.identity/client-id` and the pod the label
+`azure.workload.identity/use: "true"`) or `Secret` with the keys `clientId` and
+`clientSecret`. The identity needs only these actions on the namespace, in a
+custom role scoped to it: `Microsoft.EventGrid/namespaces/read` and
+`.../clients`, `.../clientGroups`, `.../topicSpaces` and `.../permissionBindings`
+each with `read`, `write` and `delete`. A broad built-in role such as Contributor
+grants far more than that. The probe reads the namespace
+through Azure Resource Manager and records `endpoint` (its MQTT host name),
+`region` (its location), `resourceId` and `port` (8883) in `status.discovered`.
+
+A claim on an Azure broker makes, in the namespace: a **Client** with
+certificate authentication by thumbprint, a **ClientGroup** that selects it, one
+**TopicSpace** for the topics it may publish to and one for the topics it may
+subscribe to (each only if the ACLs ask for it), and a **PermissionBinding**
+(`Publisher` or `Subscriber`) for each. The client certificate is made by the
+operator; the private key is written only to the binding Secret. The Secret
+(`cloud: azure`) has the keys of the AWS one: `host`, `port`, `protocol`,
+`endpoint`, `clientId`, `certificate.pem`, `private-key.pem`, `topicRoot`.
+**Clients must send `clientId` (the Event Grid authentication name) as the MQTT
+username**, as Microsoft recommends, and present the certificate. A rotation
+allows the new thumbprint beside the old one (at most two) for the grace period,
+then only the new one. `status.externalName` is the client name, `status.externalId`
+and `status.rotation.active` are thumbprints. Objects of the derived names that
+the claim did not make are a `NameCollision` and are never changed or deleted;
+delete removes bindings, topic spaces, the group and the client in that order.
+Event Grid operations that are still running show `Ready=False` with reason
+`Creating`, `Updating` or `Deleting`. What stays unchecked is in
+[NFR-0006](docs/nfrs/NFR-0006-event-grid-checks-stop-at-the-fake.md).
 
 ## Controllers
 
@@ -467,7 +503,11 @@ The AWS IoT Core backend (`internal/iotcore` and the probe) is tested against
 moto 5.2.5 (build tags `integration iotcore`), in the same workflow; see
 [`test/integration`](test/integration/README.md) and
 [ADR 0004](docs/adrs/0004-aws-iot-core-backend.md) for what moto cannot check.
-CI runs it; nothing in the devcontainer does.
+CI runs it; nothing in the devcontainer does. The Azure Event Grid backend
+(`internal/eventgrid` and the probe) is tested against an in-process fake of
+the namespace API and of Entra (build tags `integration eventgrid`, job
+`eventgrid` of the same workflow); see
+[NFR-0006](docs/nfrs/NFR-0006-event-grid-checks-stop-at-the-fake.md).
 
 ## Releases
 

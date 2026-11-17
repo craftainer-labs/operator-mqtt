@@ -26,6 +26,7 @@ import (
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/eventgrid"
 	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
@@ -96,8 +97,11 @@ type Config struct {
 	Egress                egress.Policy
 	// IoT builds the AWS IoT client of a broker with a provider; production uses
 	// AWSIoT, and tests replace it.
-	IoT     IoTFunc
-	Connect ConnectFunc
+	IoT IoTFunc
+	// EventGrid builds the Azure Event Grid client of a broker with an Azure
+	// provider; production uses AzureEventGrid, and tests replace it.
+	EventGrid EventGridFunc
+	Connect   ConnectFunc
 	// Cache keeps the connection of each broker between reconciles; nil
 	// connects for every use and nobody closes the connection, so the operator
 	// always sets one.
@@ -127,6 +131,10 @@ type backend struct {
 	iot func(ctx context.Context) (*iotcore.Client, error)
 	// client is the client iot built, kept for the rest of the reconcile.
 	client *iotcore.Client
+	// eg is iot for an Azure broker: the Event Grid client, built on first use.
+	// Exactly one of iot and eg is set on a cloud broker.
+	eg       func(ctx context.Context) (*eventgrid.Client, error)
+	egClient *eventgrid.Client
 	// leases are the releases of the connections broker handed out; release
 	// calls them. The mutex guards the slice in case the lifecycle framework
 	// calls broker from more than one goroutine.

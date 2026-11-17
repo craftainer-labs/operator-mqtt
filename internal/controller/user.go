@@ -27,6 +27,7 @@ import (
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/eventgrid"
 	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
@@ -59,6 +60,14 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		defer be.release()
 	}
 	h := r.hooks(&u)
+	if err == nil && be.eg != nil {
+		opts.ServerHost = be.host
+		x := newEventGridExternal(be, &u, h, r.Now)
+		if u.DeletionTimestamp.IsZero() {
+			x.pre = be.notReady
+		}
+		return lifecycle.Reconcile[mqttv1alpha1.MqttUserSpec, eventgrid.State](ctx, r.Client, &u, u.Spec, x, opts)
+	}
 	if err == nil && be.iot != nil {
 		opts.ServerHost = be.host
 		x := newIoTExternal(be, &u, h)

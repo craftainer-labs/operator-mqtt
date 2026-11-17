@@ -68,6 +68,25 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			},
 		}
 	}
+	azureCluster := func(name string) *mqttv1alpha1.ClusterMqttBroker {
+		return &mqttv1alpha1.ClusterMqttBroker{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: mqttv1alpha1.ClusterMqttBrokerSpec{
+				Provider: &mqttv1alpha1.ClusterProvider{
+					Type: cloud.ProviderAzure,
+					Azure: &mqttv1alpha1.ClusterAzureProvider{
+						AzureClusterBlock: cloud.AzureClusterBlock{AzureBlock: cloud.AzureBlock{
+							TenantID:       "00000000-0000-4000-8000-000000000001",
+							SubscriptionID: "00000000-0000-4000-8000-000000000002",
+							ResourceGroup:  "iot-rg",
+						}},
+						EventGridNamespace: "devices",
+					},
+				},
+				AllowedNamespaces: common.AllowedNamespaces{From: common.NamespacesAll},
+			},
+		}
+	}
 	awsNamespaced := func(name string) *mqttv1alpha1.MqttBroker {
 		return &mqttv1alpha1.MqttBroker{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -142,10 +161,32 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			Expect(create(b)).To(Succeed())
 		})
 
-		It("refuses a provider other than AWS and credentials without a provider", func() {
-			b := awsCluster("azure")
-			b.Spec.Provider.Type = cloud.ProviderAzure
-			rejected(create(b), "provider")
+		It("takes an Azure provider and checks its block", func() {
+			b := azureCluster("azure")
+			b.Spec.Provider.Azure.EndpointOverride = "https://10.0.0.8"
+			Expect(create(b)).To(Succeed())
+
+			b = azureCluster("azure-no-sub")
+			b.Spec.Provider.Azure.SubscriptionID = ""
+			rejected(create(b), "subscriptionID and resourceGroup are required")
+
+			b = azureCluster("azure-no-rg")
+			b.Spec.Provider.Azure.ResourceGroup = ""
+			rejected(create(b), "subscriptionID and resourceGroup are required")
+
+			b = azureCluster("azure-wrong-block")
+			b.Spec.Provider.AWS = awsCluster("x").Spec.Provider.AWS
+			rejected(create(b), "aws is required with type AWS and forbidden otherwise")
+
+			b = awsCluster("aws-wrong-block")
+			b.Spec.Provider.Azure = azureCluster("x").Spec.Provider.Azure
+			rejected(create(b), "azure is required with type Azure and forbidden otherwise")
+		})
+
+		It("refuses a provider other than AWS and Azure, and credentials without a provider", func() {
+			b := awsCluster("gcp")
+			b.Spec.Provider = &mqttv1alpha1.ClusterProvider{Type: cloud.ProviderGCP}
+			rejected(create(b), "only provider.type AWS and Azure are supported")
 
 			b = clusterBroker("creds-only")
 			b.Spec.Credentials = &cloud.Credentials{Source: cloud.SourceWorkloadIdentity}

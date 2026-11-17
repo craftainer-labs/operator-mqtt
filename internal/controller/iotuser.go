@@ -424,17 +424,23 @@ func (e *iotExternal) finish(ctx context.Context, active string) error {
 // data endpoint, the client id the policy allows, and the certificate and its
 // key. The private key must never be logged.
 func (e *iotExternal) data(certPEM, key string) binding.Data {
-	host, port := e.be.spec.Host, strconv.Itoa(int(e.be.spec.PortOrDefault()))
+	return certData(e.be, e.name, e.root, "aws", certPEM, key)
+}
+
+// certData is the binding of a cloud broker's certificate user: the same keys
+// on AWS and Azure, with the cloud's name in "cloud".
+func certData(be *backend, clientID, root, cloudName, certPEM, key string) binding.Data {
+	host, port := be.spec.Host, strconv.Itoa(int(be.spec.PortOrDefault()))
 	return binding.Data{
 		"host":         []byte(host),
 		"port":         []byte(port),
 		"protocol":     []byte(mqttv1alpha1.ProtocolMQTTS),
 		"endpoint":     []byte(string(mqttv1alpha1.ProtocolMQTTS) + "://" + net.JoinHostPort(host, port)),
-		"clientId":     []byte(e.name),
+		"clientId":     []byte(clientID),
 		keyCertificate: []byte(certPEM),
 		keyPrivateKey:  []byte(key),
-		"topicRoot":    []byte(e.root),
-		"cloud":        []byte("aws"),
+		"topicRoot":    []byte(root),
+		"cloud":        []byte(cloudName),
 	}
 }
 

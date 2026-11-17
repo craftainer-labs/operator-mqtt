@@ -52,6 +52,9 @@ func (p Prober) ProbeCloud(ctx context.Context, srv server.CloudServer, cc serve
 	if _, err := brokerConfigOf(srv); err != nil {
 		return probe.CloudResult{}, err
 	}
+	if isAzure(srv) {
+		return p.probeEventGrid(ctx, srv, cc)
+	}
 	if hasProvider(srv) {
 		return p.probeIoT(ctx, srv, cc)
 	}
@@ -80,6 +83,29 @@ func (p Prober) probeIoT(ctx context.Context, srv server.CloudServer, cc server.
 		mqttv1alpha1.DiscoveredEndpoint: endpoint,
 		mqttv1alpha1.DiscoveredRegion:   block.Region,
 		discoveredPort:                  strconv.Itoa(iotPort),
+	}}, nil
+}
+
+// probeEventGrid reads the Event Grid namespace of the broker's Azure
+// subscription through ARM: its MQTT host name, its ARM resource ID and its
+// location.
+func (p Prober) probeEventGrid(ctx context.Context, srv server.CloudServer, cc server.CloudConnection) (probe.CloudResult, error) {
+	if p.Config.EventGrid == nil {
+		return probe.CloudResult{}, categoryOnly(fmt.Errorf("%w: no Event Grid client", server.ErrInvalidServer))
+	}
+	c, err := p.Config.EventGrid(ctx, srv, cc)
+	if err != nil {
+		return probe.CloudResult{}, categoryOnly(err)
+	}
+	ns, err := c.Namespace(ctx)
+	if err != nil {
+		return probe.CloudResult{}, categoryOnly(err)
+	}
+	return probe.CloudResult{Discovered: map[string]string{
+		mqttv1alpha1.DiscoveredEndpoint:   ns.Hostname,
+		mqttv1alpha1.DiscoveredRegion:     ns.Location,
+		mqttv1alpha1.DiscoveredResourceID: ns.ResourceID,
+		discoveredPort:                    strconv.Itoa(iotPort),
 	}}, nil
 }
 

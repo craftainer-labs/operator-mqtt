@@ -31,7 +31,11 @@
   `services:` container, pinned by digest, reached at its private IP, with a
   small tag-recording proxy in front (moto 5.2.5 ignores the tags of
   `CreatePolicy` and lacks `ListTagsForResource`); the header of the file and
-  `../../test/integration/README.md` list what moto cannot check.
+  `../../test/integration/README.md` list what moto cannot check. A third job,
+  `eventgrid`, runs the Azure Event Grid code (build tags `integration
+  eventgrid`) against an in-process fake of the namespace API and of Entra
+  (`internal/eventgrid/egfake`), no container, on the runner's private address;
+  NFR-0006 lists what the fake cannot check.
 - `release-extras.yml` — manually dispatched with a `tag` input, right after
   each `Release`: `gh workflow run release-extras.yml -f tag=vX.Y.Z`. Publishes
   the Helm chart (OCI), the OLM bundle image and the file-based catalog image

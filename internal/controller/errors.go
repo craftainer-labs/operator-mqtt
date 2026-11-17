@@ -14,6 +14,7 @@ import (
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/eventgrid"
 	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
@@ -39,6 +40,10 @@ var (
 	// and nothing shows that this claim made it. The operator never adopts,
 	// changes or deletes it.
 	ErrPolicyUnmanaged = errors.New("an IoT policy of that name exists and is not managed by this operator")
+	// ErrObjectUnmanaged means an Event Grid object of a name the claim derives
+	// exists and nothing shows that this claim made it. The operator never
+	// adopts, changes or deletes it.
+	ErrObjectUnmanaged = errors.New("an Event Grid object of that name exists and is not managed by this operator")
 	// ErrAdminCredentials means the admin Secret lacks the username or password.
 	ErrAdminCredentials = errors.New("the admin Secret needs the keys username and password")
 )
@@ -95,6 +100,7 @@ func isEgress(err error) bool {
 var rules = []rule{
 	{is(lifecycle.ErrNameCollision), "", false},
 	{is(ErrPolicyUnmanaged), "", false},
+	{is(ErrObjectUnmanaged), "", false},
 	{is(ErrBindingNotUsable), "", false},
 	{is(ErrBrokerNotReady), "", false},
 	{is(ErrInvalidACL), "", false},
@@ -119,6 +125,11 @@ var rules = []rule{
 	{is(iotcore.ErrAPI), "the cloud API reported an error", false},
 	{is(iotcore.ErrExists), "the cloud API reported an error", false},
 	{is(iotcore.ErrBadARN), "the cloud API reported an error", false},
+	{is(eventgrid.ErrDenied), "the cloud refused the operator's credentials", false},
+	{is(eventgrid.ErrUnavailable), "the cloud API did not answer", true},
+	{is(eventgrid.ErrNotFound), "the cloud object was not found", false},
+	{is(eventgrid.ErrMQTTDisabled), "the Event Grid namespace does not have MQTT enabled", false},
+	{is(eventgrid.ErrAPI), "the cloud API reported an error", false},
 	{is(dynsec.ErrAuth), "the broker refused the operator's admin login", false},
 	{is(dynsec.ErrTimeout), "the broker did not answer in time", true},
 	{is(dynsec.ErrUnavailable), "the connection to the broker failed", true},
