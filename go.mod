@@ -9,7 +9,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/eventgrid/armeventgrid/v2 v2.3.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.19
 	github.com/aws/aws-sdk-go-v2/service/iot v1.84.12
-	github.com/craftainer-labs/lib-operator-go v0.5.0
+	github.com/craftainer-labs/lib-operator-go v0.6.0
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/onsi/ginkgo/v2 v2.27.4
 	github.com/onsi/gomega v1.39.0
