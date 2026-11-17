@@ -63,12 +63,15 @@ func privateIP(t *testing.T) string {
 // newTagProxy starts the proxy in front of the moto at upstream.
 func newTagProxy(t *testing.T, upstream string) *tagProxy {
 	t.Helper()
-	target, err := url.Parse(upstream)
-	if err != nil {
-		t.Fatal(err)
+	// The upstream must be a private IP and a port, never a name: the target is
+	// rebuilt from the parsed parts.
+	hp, err := netip.ParseAddrPort(strings.TrimPrefix(upstream, "http://"))
+	if err != nil || !hp.Addr().IsPrivate() {
+		t.Fatalf("MOTO_ENDPOINT %q is not http://<private IP>:<port>", upstream)
 	}
+	target := &url.URL{Scheme: "http", Host: hp.String()}
 	p := &tagProxy{tags: map[string][]tag{}, names: map[string]string{}, pending: map[string][]tag{}}
-	rp := httputil.NewSingleHostReverseProxy(target)
+	rp := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) { r.SetURL(target) }}
 	rp.ModifyResponse = p.observe
 	l, err := net.Listen("tcp", net.JoinHostPort(privateIP(t), "0"))
 	if err != nil {
