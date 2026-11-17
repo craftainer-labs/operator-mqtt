@@ -792,10 +792,10 @@ func TestEventGridUserLifecycleAndRotation(t *testing.T) {
 	}
 }
 
-// A first rotation whose Secret write failed after the client got the new
+// A rotation whose Secret write failed after the client got the new
 // thumbprint: nothing was recorded, so the claim still names the old
-// certificate, the Secret still holds it, and neither is lost.
-func TestEventGridFirstRotationWhoseSecretWriteFailed(t *testing.T) {
+// certificate, the Secret still holds it, and it stays.
+func TestEventGridRotationWhoseSecretWriteFailed(t *testing.T) {
 	ctx := context.Background()
 	e, srv, _, pem := egCreated(t)
 	old := e.activeThumbprint()
@@ -816,59 +816,96 @@ func TestEventGridFirstRotationWhoseSecretWriteFailed(t *testing.T) {
 	if err != nil || string(data[keyCertificate]) != pem {
 		t.Fatalf("update: %v, %v", data.Keys(), err)
 	}
-	// The old certificate, the one the Secret holds, is on the client. The new
-	// one never reached a Secret, so nothing can use it and it may go.
-	if cl, _ := srv.NewClient(); cl != nil {
-		st, _ := cl.Observe(ctx, eventgrid.NamesOf(egBase), "tenant/app/uid-1")
-		if !slices.Contains(st.Thumbprints, old) || len(st.Thumbprints) > 2 {
-			t.Errorf("thumbprints = %v", st.Thumbprints)
+	// The certificate the Secret holds is on the client. The new one never
+	// reached a Secret, so nothing can use it, and it goes.
+	cl, err := srv.NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := cl.Observe(ctx, eventgrid.NamesOf(egBase), "tenant/app/uid-1")
+	if err != nil || !slices.Equal(st.Thumbprints, []string{old}) {
+		t.Errorf("thumbprints = %v, %v", st.Thumbprints, err)
+	}
+}
+
+// A rotation whose Secret write succeeded and whose status patch failed, the
+// first one or a later one: the Secret holds the new certificate, the claim
+// names the old one, and both stay on the client, and the Secret stays, until
+// the lifecycle adopts the rotation.
+func TestEventGridRotationWhoseStatusWriteFailed(t *testing.T) {
+	for _, rotated := range []bool{false, true} {
+		ctx := context.Background()
+		e, srv, _, _ := egCreated(t)
+		old := e.activeThumbprint()
+		if rotated {
+			e.claim.Status.Rotation = &common.RotationStatus{Active: old, Sequence: 1}
+		}
+		obs, _ := e.Observe(ctx, egSpec)
+		data, gen, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := string(gen)
+		newPEM, newKey := string(data[keyCertificate]), string(data[keyPrivateKey])
+		e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, newPEM, newKey, true), nil }
+		e.drop = func(context.Context, *corev1.Secret) error { t.Error("the Secret was dropped"); return nil }
+		srv.Reset()
+		for i := range 2 {
+			obs, err = e.Observe(ctx, egSpec)
+			if err != nil || !obs.UpToDate || !slices.Equal(obs.Current.Thumbprints, []string{old, next}) {
+				t.Fatalf("rotated=%v observe %d: %+v, %v", rotated, i, obs, err)
+			}
+			got, err := e.Update(ctx, egSpec, obs.Current)
+			if err != nil || string(got[keyCertificate]) != newPEM || string(got[keyPrivateKey]) != newKey {
+				t.Fatalf("rotated=%v update %d: %v, %v", rotated, i, got.Keys(), err)
+			}
+		}
+		for _, c := range srv.Calls() {
+			if strings.HasPrefix(c, "PUT clients") {
+				t.Errorf("rotated=%v: the client was written: %s", rotated, c)
+			}
+		}
+		// The lifecycle adopts the rotation: the Secret's certificate is active,
+		// the old one is in its grace period, and the finish leaves only the new.
+		e.claim.Status.Rotation = &common.RotationStatus{Active: next, Previous: old, RetireAfter: &metav1.Time{Time: time.Now()}}
+		if obs, _ = e.Observe(ctx, egSpec); !obs.UpToDate {
+			t.Errorf("rotated=%v after the adoption: %+v", rotated, obs)
+		}
+		if err := e.RotateFinish(ctx, egSpec, obs.Current, lifecycle.RotationState{Active: lifecycle.Generation(next)}); err != nil {
+			t.Fatal(err)
+		}
+		if obs, _ = e.Observe(ctx, egSpec); !slices.Equal(obs.Current.Thumbprints, []string{next}) {
+			t.Errorf("rotated=%v after the finish: %v", rotated, obs.Current.Thumbprints)
 		}
 	}
 }
 
-// A first rotation whose Secret write succeeded and whose status patch failed:
-// the Secret holds the new certificate, the claim names the old one, and both
-// stay on the client until the lifecycle adopts the rotation.
-func TestEventGridFirstRotationWhoseStatusWriteFailed(t *testing.T) {
+// A Secret whose certificate is on the client but whose key does not belong to
+// it is not a rotation to protect: it is dropped, and the client is cut back.
+func TestEventGridUnrecordedRotationNeedsTheMatchingKey(t *testing.T) {
 	ctx := context.Background()
 	e, srv, _, _ := egCreated(t)
 	old := e.activeThumbprint()
 	obs, _ := e.Observe(ctx, egSpec)
-	data, gen, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{})
+	data, _, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := string(gen)
-	newPEM, newKey := string(data[keyCertificate]), string(data[keyPrivateKey])
-	e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, newPEM, newKey, true), nil }
-	e.drop = func(context.Context, *corev1.Secret) error { t.Error("the Secret was dropped"); return nil }
-	srv.Reset()
-	for i := range 2 {
-		obs, err = e.Observe(ctx, egSpec)
-		if err != nil || !slices.Equal(obs.Current.Thumbprints, []string{old, next}) {
-			t.Fatalf("observe %d: %v, %v", i, obs.Current.Thumbprints, err)
-		}
-		got, err := e.Update(ctx, egSpec, obs.Current)
-		if err != nil || string(got[keyCertificate]) != newPEM || string(got[keyPrivateKey]) != newKey {
-			t.Fatalf("update %d: %v, %v", i, got.Keys(), err)
-		}
+	dropped := false
+	e.binding = func(context.Context) (*corev1.Secret, error) {
+		return egSecret(e, string(data[keyCertificate]), "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n", true), nil
 	}
-	for _, c := range srv.Calls() {
-		if strings.HasPrefix(c, "PUT clients") {
-			t.Errorf("the client was written: %s", c)
-		}
+	e.drop = func(context.Context, *corev1.Secret) error { dropped = true; return nil }
+	obs, _ = e.Observe(ctx, egSpec)
+	if obs.UpToDate {
+		t.Error("a Secret with another certificate's key is a protected rotation")
 	}
-	// The lifecycle adopts the rotation: the Secret's certificate is active, the
-	// old one is in its grace period, and the finish leaves only the new one.
-	e.claim.Status.Rotation = &common.RotationStatus{Active: next, RetireAfter: &metav1.Time{Time: time.Now()}}
-	if obs, _ = e.Observe(ctx, egSpec); !obs.UpToDate {
-		t.Errorf("after the adoption: %+v", obs)
+	if _, err := e.Update(ctx, egSpec, obs.Current); !errors.Is(err, ErrBindingNotUsable) || !dropped {
+		t.Errorf("update: %v, dropped %v", err, dropped)
 	}
-	if err := e.RotateFinish(ctx, egSpec, obs.Current, lifecycle.RotationState{Active: lifecycle.Generation(next)}); err != nil {
-		t.Fatal(err)
-	}
-	if obs, _ = e.Observe(ctx, egSpec); !slices.Equal(obs.Current.Thumbprints, []string{next}) {
-		t.Errorf("after the finish: %v", obs.Current.Thumbprints)
+	cl, _ := srv.NewClient()
+	if st, _ := cl.Observe(ctx, eventgrid.NamesOf(egBase), "tenant/app/uid-1"); !slices.Equal(st.Thumbprints, []string{old}) {
+		t.Errorf("thumbprints = %v", st.Thumbprints)
 	}
 }
 
@@ -903,5 +940,67 @@ func TestEventGridUnrecordedRotationWithAStranger(t *testing.T) {
 	obs, _ = e.Observe(ctx, egSpec)
 	if len(obs.Current.Thumbprints) != 2 || !slices.Contains(obs.Current.Thumbprints, old) || !slices.Contains(obs.Current.Thumbprints, string(gen)) {
 		t.Errorf("thumbprints = %v", obs.Current.Thumbprints)
+	}
+}
+
+// A rotation whose status patch failed is adopted by the lifecycle from the
+// Secret's marks: the claim converges, the old certificate is retired after
+// the grace period, and the Secret is never dropped on the way.
+func TestEventGridUserAdoptsAnUnrecordedRotation(t *testing.T) {
+	ctx := context.Background()
+	fake := egfake.New(t, "127.0.0.1")
+	client, err := fake.NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, func(s *mqttv1alpha1.ClusterMqttBroker) {
+		s.Spec.Host = ""
+		s.Spec.AdminCredentialsSecretRef = nil
+		s.Spec.Provider = azureCluster().Spec.Provider
+	})
+	h.cfg.EventGrid = func(context.Context, server.CloudServer, server.CloudConnection) (*eventgrid.Client, error) {
+		return client, nil
+	}
+	h.get(h.server)
+	h.server.Status.Discovered = map[string]string{mqttv1alpha1.DiscoveredEndpoint: egHost}
+	h.must(env.Client.Status().Update(ctx, h.server))
+	r := &UserReconciler{h.cfg}
+	grace := metav1.Duration{Duration: time.Hour}
+	u := h.user("device", func(u *mqttv1alpha1.MqttUser) {
+		u.Spec.RotationPolicy = &common.RotationPolicy{GracePeriod: &grace}
+	})
+	name := egName(h.ns, "device")
+	thumbprints := func() int {
+		auth, _ := fake.Properties("clients", name)["clientCertificateAuthentication"].(map[string]any)
+		list, _ := auth["allowedThumbprints"].([]any)
+		return len(list)
+	}
+	h.reconcileOK(r, u)
+	h.get(u)
+	first := u.Status.ExternalID
+	h.patch(u, func() { u.Annotations = map[string]string{lifecycle.AnnotationRotate: "1"} })
+	h.reconcileOK(r, u)
+	h.get(u)
+	second := u.Status.Rotation.Active
+	if second == first || thumbprints() != 2 {
+		t.Fatalf("rotation = %+v, thumbprints = %d", u.Status.Rotation, thumbprints())
+	}
+
+	// The status patch is lost: the claim is back to before the rotation, while
+	// the Secret holds the new certificate and its marks.
+	u.Status.Rotation, u.Status.ExternalID = nil, first
+	h.must(env.Client.Status().Update(ctx, u))
+	h.reconcileOK(r, u)
+	h.get(u)
+	if u.Status.Rotation == nil || u.Status.Rotation.Active != second || thumbprints() != 2 {
+		t.Fatalf("after the adoption: rotation = %+v, thumbprints = %d", u.Status.Rotation, thumbprints())
+	}
+	if got := h.bindingSecret(u); eventgrid.PEMThumbprint(got[keyCertificate]) != second {
+		t.Errorf("the binding does not hold the adopted certificate: %v", got)
+	}
+	h.now = h.now.Add(2 * time.Hour)
+	h.reconcileOK(r, u)
+	if thumbprints() != 1 {
+		t.Errorf("thumbprints after the grace period = %d", thumbprints())
 	}
 }

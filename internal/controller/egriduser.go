@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"slices"
@@ -193,7 +194,7 @@ func (e *egExternal) observe(ctx context.Context, spec mqttv1alpha1.MqttUserSpec
 	// A rule the controller refuses gives no wanted spec, so the user is never
 	// up to date and Update reports it; deleting does not need a valid spec.
 	want, err := e.spec(spec)
-	upToDate := err == nil && st.Client.Mine && st.InSync(e.id, want) && e.thumbprintsOK(st)
+	upToDate := err == nil && st.Client.Mine && st.InSync(e.id, want) && (e.thumbprintsOK(st) || e.unrecordedRotation(ctx, st))
 	return lifecycle.Observation[eventgrid.State]{Exists: true, UpToDate: upToDate, Current: st}, nil
 }
 
@@ -256,6 +257,10 @@ func (e *egExternal) fresh(ctx context.Context, c *eventgrid.Client, want eventg
 // this claim that holds something else: the next reconcile finds the Secret
 // missing and the lifecycle rotates. A claim that was never rotated and whose
 // client does not allow its certificate (the client was lost) gets a new one.
+//
+// The exception is a rotation the lifecycle never recorded (see unrecorded): the
+// client then allows the active certificate and the Secret's, with no grace
+// period, and both stay until the lifecycle adopts the rotation.
 func (e *egExternal) Update(ctx context.Context, spec mqttv1alpha1.MqttUserSpec, cur eventgrid.State) (binding.Data, error) {
 	data, err := e.update(ctx, spec, cur)
 	return data, e.wrap(ctx, "update", err)
@@ -284,18 +289,8 @@ func (e *egExternal) update(ctx context.Context, spec mqttv1alpha1.MqttUserSpec,
 		// back: the Secret is dropped and the lifecycle rotates.
 		return nil, e.unusable(ctx, s)
 	}
-	// held is the thumbprint of the certificate the binding Secret holds. When a
-	// first rotation's status was never recorded (its Secret write or status
-	// patch failed after RotateBegin) the claim still names the old certificate
-	// while a Secret of this claim already holds the new one, and both are on
-	// the client: neither goes, and the Secret stays, until the lifecycle adopts
-	// the rotation.
-	held, heldKey := "", ""
-	if s != nil {
-		held, heldKey = eventgrid.PEMThumbprint(string(s.Data[keyCertificate])), string(s.Data[keyPrivateKey])
-	}
-	unrecorded := heldKey != "" && held != active && e.claim.GetRotationStatus().Active == "" &&
-		slices.Contains(cur.Thumbprints, held) && metav1.IsControlledBy(s, e.claim)
+	held, heldKey := heldBy(s)
+	unrecorded := e.unrecorded(s, cur, active)
 	if !e.thumbprintsOK(cur) && !(unrecorded && len(cur.Thumbprints) <= 2) {
 		// A thumbprint that is neither active nor in a grace period goes.
 		keep := []string{active}
@@ -315,6 +310,42 @@ func (e *egExternal) update(ctx context.Context, spec mqttv1alpha1.MqttUserSpec,
 		return e.data(string(s.Data[keyCertificate]), heldKey), nil
 	}
 	return nil, e.unusable(ctx, s)
+}
+
+// heldBy returns the thumbprint and the private key of the certificate a
+// binding Secret holds, "" for each that is not there.
+func heldBy(s *corev1.Secret) (thumbprint, key string) {
+	if s == nil {
+		return "", ""
+	}
+	return eventgrid.PEMThumbprint(string(s.Data[keyCertificate])), string(s.Data[keyPrivateKey])
+}
+
+// unrecorded reports a rotation the lifecycle never recorded: its RotateBegin
+// put the new thumbprint on the client and a Secret of this claim already holds
+// the new certificate (with its own key), but the status still names the old
+// one, because the status patch failed after the Secret was written. Both
+// certificates are valid, so neither goes and the Secret stays; the lifecycle
+// adopts the rotation from the Secret's marks when it next rotates.
+func (e *egExternal) unrecorded(s *corev1.Secret, cur eventgrid.State, active string) bool {
+	held, key := heldBy(s)
+	if key == "" || held == active || e.inGrace() || !slices.Contains(cur.Thumbprints, held) || !metav1.IsControlledBy(s, e.claim) {
+		return false
+	}
+	_, err := tls.X509KeyPair(s.Data[keyCertificate], s.Data[keyPrivateKey])
+	return err == nil
+}
+
+// unrecordedRotation is unrecorded for Observe: a client with the active
+// certificate and one more is not drift when the other is that of an unrecorded
+// rotation, which only the lifecycle's next rotate can adopt.
+func (e *egExternal) unrecordedRotation(ctx context.Context, st eventgrid.State) bool {
+	active := e.activeThumbprint()
+	if len(st.Thumbprints) > 2 || !slices.Contains(st.Thumbprints, active) {
+		return false
+	}
+	s, err := e.binding(ctx)
+	return err == nil && e.unrecorded(s, st, active)
 }
 
 // unusable drops a binding Secret of this claim that does not hold the active
@@ -342,7 +373,10 @@ func (e *egExternal) Delete(ctx context.Context, cur eventgrid.State) error {
 // RotateBegin implements lifecycle.Rotator: a new certificate is made and its
 // thumbprint is added to the client's allowed thumbprints beside the active one
 // (never more than two, as Event Grid allows). The old certificate stays valid.
-// The thumbprint is the new generation. A retry makes another certificate and
+// The thumbprint is the new generation; the claim does not record it (status.
+// externalId follows rotation.Active, which the lifecycle sets once the Secret
+// and the status hold the rotation), so a rotation that fails to be written
+// never leaves the claim naming a certificate no Secret holds. A retry makes another certificate and
 // replaces the list, so a certificate a failed attempt added does not stay.
 func (e *egExternal) RotateBegin(ctx context.Context, _ mqttv1alpha1.MqttUserSpec, cur eventgrid.State, _ lifecycle.RotationState) (binding.Data, lifecycle.Generation, error) {
 	data, gen, err := e.begin(ctx, cur)
