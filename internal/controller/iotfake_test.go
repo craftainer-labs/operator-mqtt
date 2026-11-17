@@ -27,8 +27,8 @@ type fakeIoT struct {
 	fail     map[string]error
 	pageSize int
 	// certARN, when set, is the ARN CreateKeysAndCertificate returns.
-	certARN  string
-	seq      int
+	certARN string
+	seq     int
 
 	policies map[string]*fakePolicy
 	certs    map[string]*fakeCert
