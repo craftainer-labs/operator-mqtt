@@ -21,17 +21,17 @@ var errStep = errors.New("a step failed")
 
 // Each step of NewCert that can fail is an ErrAPI that names no key material.
 func TestNewCertFailures(t *testing.T) {
-	genKey, serial, sign, enc := generateKey, newSerial, signCert, encodeKey
-	t.Cleanup(func() { generateKey, newSerial, signCert, encodeKey = genKey, serial, sign, enc })
+	genKey, serial, sign, enc := newKeyPair, newSerial, signCert, pkcs8Encode
+	t.Cleanup(func() { newKeyPair, newSerial, signCert, pkcs8Encode = genKey, serial, sign, enc })
 	for name, fail := range map[string]func(){
-		"key":    func() { generateKey = func() (*ecdsa.PrivateKey, error) { return nil, errStep } },
+		"key":    func() { newKeyPair = func() (*ecdsa.PrivateKey, error) { return nil, errStep } },
 		"serial": func() { newSerial = func() (*big.Int, error) { return nil, errStep } },
 		"sign": func() {
 			signCert = func(io.Reader, *x509.Certificate, *x509.Certificate, any, any) ([]byte, error) { return nil, errStep }
 		},
-		"encode": func() { encodeKey = func(any) ([]byte, error) { return nil, errStep } },
+		"encode": func() { pkcs8Encode = func(any) ([]byte, error) { return nil, errStep } },
 	} {
-		generateKey, newSerial, signCert, encodeKey = genKey, serial, sign, enc
+		newKeyPair, newSerial, signCert, pkcs8Encode = genKey, serial, sign, enc
 		fail()
 		if c, err := NewCert("client", time.Now()); !errors.Is(err, ErrAPI) || c.Key() != "" || c.PEM != "" {
 			t.Errorf("%s: %+v, %v", name, c, err)

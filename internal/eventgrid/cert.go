@@ -22,10 +22,10 @@ const certLifetime = 10 * 365 * 24 * time.Hour
 
 // The steps of NewCert that can fail, as variables so a test can make each fail.
 var (
-	generateKey = func() (*ecdsa.PrivateKey, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) }
+	newKeyPair  = func() (*ecdsa.PrivateKey, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) }
 	newSerial   = func() (*big.Int, error) { return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127)) }
 	signCert    = x509.CreateCertificate
-	encodeKey   = x509.MarshalPKCS8PrivateKey
+	pkcs8Encode = x509.MarshalPKCS8PrivateKey
 )
 
 // Cert is a client certificate and its private key. Event Grid never sees the
@@ -51,7 +51,7 @@ func (c Cert) GoString() string { return c.String() }
 // NewCert makes a self-signed ECDSA P-256 client certificate whose common name
 // is the client's authentication name.
 func NewCert(authName string, now time.Time) (Cert, error) {
-	k, err := generateKey()
+	k, err := newKeyPair()
 	if err != nil {
 		return Cert{}, fmt.Errorf("%w: generate a key: %w", ErrAPI, err)
 	}
@@ -69,7 +69,7 @@ func NewCert(authName string, now time.Time) (Cert, error) {
 	if err != nil {
 		return Cert{}, fmt.Errorf("%w: sign the certificate: %w", ErrAPI, err)
 	}
-	keyDER, err := encodeKey(k)
+	keyDER, err := pkcs8Encode(k)
 	if err != nil {
 		return Cert{}, fmt.Errorf("%w: encode the key: %w", ErrAPI, err)
 	}
