@@ -103,8 +103,7 @@ spec:
               metadata:
                 name: broker
               spec:
-                port: 8883
-                protocol: mqtts
+                # port and protocol stay unset: the controller defaults them.
                 controlTopic: $CONTROL/dynamic-security/v1
                 topicRoot: '{namespace}/'
 
