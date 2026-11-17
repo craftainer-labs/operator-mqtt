@@ -192,6 +192,13 @@ func TestIoTCreateFailures(t *testing.T) {
 	if _, err := e.Create(ctx, wide); !errors.Is(err, iotcore.ErrInvalidTopic) || err.Error() != "an ACL topic cannot be used on AWS IoT Core" || f.joined() != "" {
 		t.Errorf("wide topic: %v, %q", err, f.joined())
 	}
+	// A certificate whose ARN names no account cannot scope a policy.
+	f = newFakeIoT()
+	f.certARN = "arn:aws:iot:::cert/cert0001"
+	e = iotExt(t, f)
+	if _, err := e.Create(ctx, iotSpec); !errors.Is(err, iotcore.ErrBadARN) {
+		t.Errorf("bad certificate ARN: %v", err)
+	}
 	// So is a policy that is too long for IoT.
 	f = newFakeIoT()
 	e = iotExt(t, f)

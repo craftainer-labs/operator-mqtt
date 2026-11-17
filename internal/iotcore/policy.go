@@ -81,13 +81,10 @@ func Document(s Scope, clientID string, rules []Rule) (string, error) {
 		}
 	}
 	b, err := json.Marshal(doc)
-	if err != nil {
-		return "", err
-	}
-	if n := utf8.RuneCount(b); n > maxPolicyLen {
+	if n := utf8.RuneCount(b); err == nil && n > maxPolicyLen {
 		return "", fmt.Errorf("%w: the policy has %d characters, IoT allows %d", ErrInvalidTopic, n, maxPolicyLen)
 	}
-	return string(b), nil
+	return string(b), err
 }
 
 // topicNames turns a topic filter into the resource names of the topics it

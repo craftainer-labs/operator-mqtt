@@ -69,7 +69,7 @@ func newIoTExternal(be *backend, claim *mqttv1alpha1.MqttUser, h hooks) *iotExte
 // (its ARN) names. "" when there is none.
 func (e *iotExternal) activeID() string {
 	if a := e.claim.GetRotationStatus().Active; a != "" {
-		return string(a)
+		return a
 	}
 	return iotcore.CertID(e.claim.GetExternalID())
 }

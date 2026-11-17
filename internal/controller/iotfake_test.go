@@ -26,6 +26,8 @@ type fakeIoT struct {
 	calls    []string
 	fail     map[string]error
 	pageSize int
+	// certARN, when set, is the ARN CreateKeysAndCertificate returns.
+	certARN  string
 	seq      int
 
 	policies map[string]*fakePolicy
@@ -117,6 +119,9 @@ func (f *fakeIoT) CreateKeysAndCertificate(_ context.Context, in *iot.CreateKeys
 	f.seq++
 	id := fmt.Sprintf("cert%04d", f.seq)
 	arn := "arn:aws:iot:eu-west-1:" + fakeAccount + ":cert/" + id
+	if f.certARN != "" {
+		arn = f.certARN
+	}
 	status := "INACTIVE"
 	if in.SetAsActive {
 		status = "ACTIVE"
