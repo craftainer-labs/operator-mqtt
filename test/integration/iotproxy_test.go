@@ -124,7 +124,7 @@ func (p *tagProxy) listTags(w http.ResponseWriter, arn string) {
 func (p *tagProxy) observe(resp *http.Response) error {
 	r := resp.Request
 	switch {
-	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/policies/") && resp.StatusCode == http.StatusOK:
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/policies/") && strings.Count(r.URL.Path, "/") == 2 && resp.StatusCode == http.StatusOK:
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return err
@@ -140,7 +140,7 @@ func (p *tagProxy) observe(resp *http.Response) error {
 		}
 		delete(p.pending, name)
 		p.mu.Unlock()
-	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/policies/") && resp.StatusCode/100 == 2:
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/policies/") && strings.Count(r.URL.Path, "/") == 2 && resp.StatusCode/100 == 2:
 		name := strings.TrimPrefix(r.URL.Path, "/policies/")
 		p.mu.Lock()
 		delete(p.tags, p.names[name])

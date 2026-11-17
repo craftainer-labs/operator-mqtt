@@ -5,8 +5,8 @@ import (
 )
 
 // Keys of status.discovered (common.ServerStatus.Discovered): what the probe
-// read from the cloud (ADR 0002, section 16.1). An AWS IoT Core server has the
-// two that apply to it.
+// read from the cloud (ADR 0002, section 16.1). An AWS IoT Core server has these
+// two plus "port" (always 8883), which only the controller package reads.
 const (
 	// DiscoveredEndpoint is the account's IoT data endpoint host name
 	// (DescribeEndpoint, iot:Data-ATS).
