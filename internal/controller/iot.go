@@ -13,6 +13,7 @@ import (
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
+	"github.com/craftainer-labs/operator-mqtt/internal/eventgrid"
 	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
@@ -57,7 +58,8 @@ func awsOf(srv server.CloudServer) (cloud.Scope, cloud.AWSClusterBlock, *cloud.C
 	return "", cloud.AWSClusterBlock{}, nil, fmt.Errorf("%w: the provider is not AWS", server.ErrInvalidServer)
 }
 
-// iotPort is the port of AWS IoT Core's MQTT over TLS listener.
+// iotPort is the port of the MQTT over TLS listener of AWS IoT Core and of
+// Azure Event Grid.
 const iotPort = 8883
 
 // discoveredPort is the key of status.discovered that carries the port (one of
@@ -92,6 +94,25 @@ func (c Config) cloudBackend(obj brokerObject, cc server.CloudConnection) *backe
 	b := &backend{spec: spec, conn: cc.Connection, host: host}
 	if host == "" || brokerNotReady(obj.conditions) {
 		b.notReady = ErrBrokerNotReady
+	}
+	if isAzure(obj.srv) {
+		b.eg = func(ctx context.Context) (*eventgrid.Client, error) {
+			b.leaseMu.Lock()
+			defer b.leaseMu.Unlock()
+			if b.egClient != nil {
+				return b.egClient, nil
+			}
+			if c.EventGrid == nil {
+				return nil, coarse(ctx, "build the cloud client", fmt.Errorf("%w: no Event Grid client", server.ErrInvalidServer))
+			}
+			cl, err := c.EventGrid(ctx, obj.srv, cc)
+			if err != nil {
+				return nil, coarse(ctx, "build the cloud client", err)
+			}
+			b.egClient = cl
+			return cl, nil
+		}
+		return b
 	}
 	b.iot = func(ctx context.Context) (*iotcore.Client, error) {
 		b.leaseMu.Lock()

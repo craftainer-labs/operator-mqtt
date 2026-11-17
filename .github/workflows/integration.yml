@@ -19,6 +19,16 @@
 # DescribeEndpoint returns (moto makes up a random one). NFR-0005 and
 # test/integration/README.md say the same.
 #
+# A third job, eventgrid (NKmqtt-2), runs the operator's Azure Event Grid code
+# (internal/eventgrid and the probe, build tags `integration eventgrid`) against
+# internal/eventgrid/egfake: an in-process fake of the Event Grid namespace API
+# in Azure Resource Manager and of the Entra authority, served over TLS on the
+# runner's private address (the egress policy refuses loopback), reached through
+# the same cloud.Egress.Azure the operator uses. No container runs. What the fake
+# cannot check stays unchecked: a real MQTT TLS connect with the client
+# certificate, Workload Identity, and Event Grid's own evaluation of permissions,
+# name rules and quotas. NFR-0006 and test/integration/README.md say the same.
+#
 # Instance-owned: listed in .github/template-sync-manifest.local.yml, so
 # template sync never replaces it. A step-started container rather than a
 # `services:` container, because a service container starts before the
@@ -219,3 +229,45 @@ jobs:
         env:
           MOTO_ID: ${{ job.services.moto.id }}
         run: docker logs "$MOTO_ID"
+
+  eventgrid:
+    name: Azure Event Grid against a fake
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER_AMD64 || 'ubuntu-24.04' }}
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install golangci-lint
+        run: |
+          set -euo pipefail
+          dir="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64"
+          base="https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}"
+          tmp="$RUNNER_TEMP/golangci-lint"
+          mkdir -p "$tmp"
+          curl -LsSf -o "$tmp/$dir.tar.gz" "$base/$dir.tar.gz"
+          curl -LsSf -o "$tmp/checksums.txt" "$base/golangci-lint-${GOLANGCI_LINT_VERSION}-checksums.txt"
+          (cd "$tmp" && awk -v f="$dir.tar.gz" '$2 == f' checksums.txt | sha256sum -c -)
+          tar -xzf "$tmp/$dir.tar.gz" -C "$tmp"
+          echo "$tmp/$dir" >> "$GITHUB_PATH"
+
+      - name: Lint the integration tests
+        run: golangci-lint run --build-tags "integration eventgrid" ./test/integration/...
+
+      - name: Run the Azure Event Grid integration tests
+        run: |
+          set -euo pipefail
+          go test -tags "integration eventgrid" -race -count=1 -v -timeout 15m \
+            -run '^TestEventGrid' \
+            -coverpkg=./internal/eventgrid/,./internal/controller/ -coverprofile="$RUNNER_TEMP/eventgrid.cover" \
+            ./test/integration/...
+          go tool cover -func="$RUNNER_TEMP/eventgrid.cover" | tail -n 1

@@ -226,3 +226,16 @@ func TestProviderIsAWS(t *testing.T) {
 	g.Expect((&Provider{Type: cloud.ProviderAWS, AWS: &cloud.AWSBlock{}}).IsAWS()).To(BeTrue())
 	g.Expect((&Provider{Type: cloud.ProviderAzure, AWS: &cloud.AWSBlock{}}).IsAWS()).To(BeFalse())
 }
+
+func TestProviderIsAzure(t *testing.T) {
+	g := NewWithT(t)
+	var nilCluster *ClusterProvider
+	var nilNamespaced *Provider
+	g.Expect(nilCluster.IsAzure()).To(BeFalse())
+	g.Expect(nilNamespaced.IsAzure()).To(BeFalse())
+	g.Expect((&ClusterProvider{Type: cloud.ProviderAzure}).IsAzure()).To(BeFalse(), "no azure block")
+	g.Expect((&Provider{Type: cloud.ProviderAzure}).IsAzure()).To(BeFalse(), "no azure block")
+	g.Expect((&ClusterProvider{Type: cloud.ProviderAzure, Azure: &ClusterAzureProvider{}}).IsAzure()).To(BeTrue())
+	g.Expect((&Provider{Type: cloud.ProviderAzure, Azure: &AzureProvider{}}).IsAzure()).To(BeTrue())
+	g.Expect((&Provider{Type: cloud.ProviderAWS, Azure: &AzureProvider{}}).IsAzure()).To(BeFalse())
+}

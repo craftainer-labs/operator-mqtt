@@ -355,7 +355,7 @@ func setup(mgr ctrl.Manager, webhooks bool, cs controllerSettings) error {
 	cfg := controller.Config{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder(EventRecorderName),
 		ManagedBy: EventRecorderName, OperatorNamespace: cs.namespace, DefaultDeletionPolicy: cs.deletion,
-		Egress: cs.egress, IoT: controller.AWSIoT(cs.egressMode), Connect: controller.ConnectAdmin, Cache: conns,
+		Egress: cs.egress, IoT: controller.AWSIoT(cs.egressMode), EventGrid: controller.AzureEventGrid(cs.egressMode, nil), Connect: controller.ConnectAdmin, Cache: conns,
 		MaxConcurrentReconciles: cs.maxConcurrent,
 	}
 	steps = append(steps,

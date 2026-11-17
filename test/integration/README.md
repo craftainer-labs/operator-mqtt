@@ -87,6 +87,24 @@ The controller's own decisions (never adopting a foreign policy, the rotation
 state machine) are covered by the unit tests, because `internal/controller`'s
 lifecycle types are not exported to this package.
 
+## Azure Event Grid against a fake (build tags `integration eventgrid`)
+
+A third lane (job `eventgrid`) runs the operator's Azure Event Grid code against
+`internal/eventgrid/egfake`, an in-process fake of the Event Grid namespace API
+in Azure Resource Manager and of the Entra authority. No container runs: the
+fake is a TLS server on the host's private non-loopback IPv4 address (the egress
+policy refuses loopback), and the tests (`TestEventGrid*` in `eventgrid_test.go`)
+build the client the way the operator does (`controller.AzureEventGrid` with
+`egress.ModeAllowPrivate`, a client secret from a Secret's data, an
+`endpointOverride` that is both the Entra authority and the ARM endpoint). They
+check the probe (`endpoint`, `region`, `resourceId`, `port`, and that an Entra
+token was fetched), create and the overlap of two thumbprints, the reverse-order
+delete, a pending operation and that a foreign object is not adopted.
+
+What this lane does not check: a real MQTT TLS connect with the client
+certificate, Workload Identity, and Event Grid's own evaluation of permissions,
+name rules and quotas ([NFR-0006](../../docs/nfrs/NFR-0006-event-grid-checks-stop-at-the-fake.md)).
+
 ## Running
 
 In CI, `.github/workflows/integration.yml` generates the certificates, makes the
@@ -113,6 +131,10 @@ go tool cover -func=integration.cover
 The moto lane has no devcontainer service: CI only. To run it by hand start
 `motoserver/moto:5.2.5`, set `MOTO_ENDPOINT=http://<its container IP>:5000` and
 run `go test -tags "integration iotcore" -run '^TestIoT' ./test/integration/...`
+on a host with a private (RFC 1918) address.
+
+The Event Grid lane also has no devcontainer service: run
+`go test -tags "integration eventgrid" -run '^TestEventGrid' ./test/integration/...`
 on a host with a private (RFC 1918) address.
 
 Anywhere else, run `gen-certs.sh` into a directory, make the plugin's state
