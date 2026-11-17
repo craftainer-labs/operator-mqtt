@@ -8,9 +8,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/craftainer-labs/lib-operator-go/pkg/binding"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
@@ -171,6 +173,23 @@ func (e *iotExternal) newCert(ctx context.Context, c *iotcore.Client, prev strin
 	return cert, e.persist(ctx)
 }
 
+// cleanupTimeout bounds the end of a certificate that a failed step made.
+const cleanupTimeout = 10 * time.Second
+
+// cleanup ends a certificate on a context that outlives the reconcile's
+// cancellation (a cancelled one is the usual reason the step failed), with a
+// deadline of its own. A failure is logged, never returned: the caller reports
+// the step's own error, which is the one a condition shows.
+func (e *iotExternal) cleanup(ctx context.Context, c *iotcore.Client, policy, certARN string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	err := c.Retire(ctx, policy, certARN)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "cannot end a certificate a failed step made", "policy", e.name)
+	}
+	return err
+}
+
 // Create implements lifecycle.External: a certificate, the policy and the
 // attachment.
 func (e *iotExternal) Create(ctx context.Context, spec mqttv1alpha1.MqttUserSpec) (binding.Data, error) {
@@ -231,7 +250,7 @@ func (e *iotExternal) create(ctx context.Context, spec mqttv1alpha1.MqttUserSpec
 // released on deletion without contacting it.
 func (e *iotExternal) refused(ctx context.Context, c *iotcore.Client, cert iotcore.Cert) error {
 	err := e.collision()
-	if c.Retire(ctx, "", cert.ARN) != nil {
+	if e.cleanup(ctx, c, "", cert.ARN) != nil {
 		// The certificate is still there: status.externalId keeps naming it, so
 		// deleting the claim ends it. The cloud's error stays out of the returned
 		// one, which a condition shows.
@@ -364,7 +383,7 @@ func (e *iotExternal) begin(ctx context.Context) (binding.Data, lifecycle.Genera
 		// Nothing records this certificate yet, so it is ended now: it grants
 		// nothing until it is active, and an active one is attached, which
 		// RotateFinish's sweep and Delete find.
-		_ = c.Retire(context.WithoutCancel(ctx), e.name, cert.ARN)
+		_ = e.cleanup(ctx, c, e.name, cert.ARN)
 		return nil, "", err
 	}
 	e.claim.SetExternalID(cert.ARN)
