@@ -404,7 +404,7 @@ func TestCoarse(t *testing.T) {
 	// and so does an error that was made coarse.
 	for _, err := range []error{
 		fmt.Errorf("%w: %q", lifecycle.ErrNameCollision, "n"), ErrBindingNotUsable, ErrBrokerNotReady, fmt.Errorf("%w: x", ErrInvalidACL),
-		fmt.Errorf("%w: wss", ErrUnsupportedProtocol), ErrCloudNotImplemented, fmt.Errorf("%w: n", ErrPolicyUnmanaged),
+		fmt.Errorf("%w: wss", ErrUnsupportedProtocol), fmt.Errorf("%w: n", ErrPolicyUnmanaged),
 	} {
 		if got := coarse(ctx, "op", err); got.Error() != err.Error() || !errors.Is(got, err) {
 			t.Errorf("%v changed to %v", err, got)

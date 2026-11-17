@@ -60,6 +60,10 @@ func awsOf(srv server.CloudServer) (cloud.Scope, cloud.AWSClusterBlock, *cloud.C
 // iotPort is the port of AWS IoT Core's MQTT over TLS listener.
 const iotPort = 8883
 
+// discoveredPort is the key of status.discovered that carries the port (one of
+// the keys ADR 0002, section 16.1 lists for a cloud server).
+const discoveredPort = "port"
+
 // cloudAddress is where a user of a cloud broker connects: spec.host if set
 // (an emulator, or a VPC endpoint), else the discovered endpoint; the port is
 // spec.port if set, else the discovered one, else 8883. "" for the host means
@@ -72,7 +76,7 @@ func cloudAddress(spec mqttv1alpha1.BrokerConfig, discovered map[string]string) 
 	if spec.Port != nil {
 		return host, *spec.Port
 	}
-	if p, err := strconv.ParseUint(discovered["port"], 10, 16); err == nil && p > 0 && p <= math.MaxInt32 {
+	if p, err := strconv.ParseUint(discovered[discoveredPort], 10, 16); err == nil && p > 0 && p <= math.MaxInt32 {
 		return host, int32(p)
 	}
 	return host, iotPort

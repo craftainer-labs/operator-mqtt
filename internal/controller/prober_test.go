@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
 // probeFixture is a Prober whose probe connection is a fake that records the
@@ -165,8 +168,8 @@ func TestProberDefaultsToDynsecProbe(t *testing.T) {
 type otherServer struct{ server.CloudServer }
 
 // ProbeCloud returns the version of a self-hosted broker with nothing
-// discovered, refuses a broker with a provider before any connection, and
-// refuses a kind of another operator.
+// discovered, reads the IoT data endpoint of a broker with a provider without
+// any dynsec connection, and refuses a kind of another operator.
 func TestProberProbeCloud(t *testing.T) {
 	ctx := context.Background()
 	p, cfgs := probeFixture("2.0.22", nil)
@@ -178,16 +181,43 @@ func TestProberProbeCloud(t *testing.T) {
 	}
 
 	cluster := &mqttv1alpha1.ClusterMqttBroker{}
-	cluster.Spec.Provider = &mqttv1alpha1.ClusterProvider{Type: cloud.ProviderAWS}
+	cluster.Spec.Provider = &mqttv1alpha1.ClusterProvider{Type: cloud.ProviderAWS, AWS: &cloud.AWSClusterBlock{AWSBlock: cloud.AWSBlock{Region: "eu-west-1"}}}
 	namespaced := &mqttv1alpha1.MqttBroker{}
-	namespaced.Spec.Provider = &mqttv1alpha1.Provider{Type: cloud.ProviderAWS}
+	namespaced.Spec.Provider = &mqttv1alpha1.Provider{Type: cloud.ProviderAWS, AWS: &cloud.AWSBlock{Region: "eu-west-1"}}
+	f := newFakeIoT()
+	p.Config.IoT = func(context.Context, server.CloudServer, server.CloudConnection) (iotcore.API, error) { return f, nil }
 	for name, s := range map[string]server.CloudServer{"cluster": cluster, "namespaced": namespaced} {
-		if _, err := p.ProbeCloud(ctx, s, server.CloudConnection{}); !errors.Is(err, ErrCloudNotImplemented) {
-			t.Errorf("%s: %v", name, err)
+		got, err := p.ProbeCloud(ctx, s, server.CloudConnection{})
+		want := map[string]string{"endpoint": "abc123-ats.iot.eu-west-1.amazonaws.com", "region": "eu-west-1", "port": "8883"}
+		if err != nil || got.Version != "" || !maps.Equal(got.Discovered, want) {
+			t.Errorf("%s: %+v, %v", name, got, err)
 		}
 	}
 	if len(*cfgs) != 1 {
 		t.Errorf("a cloud broker was connected: %d probes", len(*cfgs))
+	}
+
+	// The failures carry a category and never the cloud's words.
+	f.fail = map[string]error{"DescribeEndpoint": errors.New("dial tcp 10.1.2.3:443: refused")}
+	_, err = p.ProbeCloud(ctx, cluster, server.CloudConnection{})
+	if !errors.Is(err, iotcore.ErrUnavailable) || strings.Contains(err.Error(), "10.1.2.3") || err.Error() != "the cloud API did not answer" {
+		t.Errorf("unreachable: %v", err)
+	}
+	p.Config.IoT = func(context.Context, server.CloudServer, server.CloudConnection) (iotcore.API, error) {
+		return nil, fmt.Errorf("%w: x", cloud.ErrCredentialsUnavailable)
+	}
+	if _, err := p.ProbeCloud(ctx, cluster, server.CloudConnection{}); !errors.Is(err, cloud.ErrCredentialsUnavailable) {
+		t.Errorf("client: %v", err)
+	}
+	p.Config.IoT = nil
+	if _, err := p.ProbeCloud(ctx, cluster, server.CloudConnection{}); !errors.Is(err, server.ErrInvalidServer) {
+		t.Errorf("no client: %v", err)
+	}
+	// A provider that is not AWS is invalid.
+	odd := &mqttv1alpha1.MqttBroker{}
+	odd.Spec.Provider = &mqttv1alpha1.Provider{Type: "GCP"}
+	if _, err := p.ProbeCloud(ctx, odd, server.CloudConnection{}); !errors.Is(err, server.ErrInvalidServer) {
+		t.Errorf("not AWS: %v", err)
 	}
 
 	if _, err := p.ProbeCloud(ctx, otherServer{}, server.CloudConnection{}); !errors.Is(err, server.ErrUnknownServerKind) {

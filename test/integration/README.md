@@ -52,6 +52,41 @@ Files:
   admin with its role (manage the plugin, nothing of the tenants').
 - `mosquitto.conf` — one TLS listener, no anonymous access, the plugin.
 
+## AWS IoT Core against moto (build tags `integration iotcore`)
+
+A second lane, in the same workflow (job `moto`), runs the operator's AWS IoT
+Core code against moto 5.2.5 (by digest). It is separate from the Mosquitto
+lane: the extra tag `iotcore` keeps these files out of the Mosquitto job, which
+has no moto. The tests (`TestIoT*` in `iotcore_test.go`) build the IoT client
+the way the operator does (`controller.AWSIoT` with `egress.ModeAllowPrivate`,
+static keys from a Secret's data, an `endpointOverride`) and check:
+
+- the probe: `DescribeEndpoint` (`iot:Data-ATS`), and that `endpoint`, `region`
+  and `port` are what it discovers;
+- create: certificate (INACTIVE), policy with the ownership tag, attach,
+  activate;
+- rotation: a second certificate beside the first, then the first retired;
+- delete ordering: the policy cannot go while a certificate is attached;
+- no adoption: a policy of the derived name that another claim or nobody made
+  keeps its tag and document, and creating over it is `ErrExists`.
+
+`iotproxy_test.go` is the test wiring: an `httptest` proxy bound to a private
+non-loopback IPv4 address (the egress policy refuses loopback, and the
+override must be reached through it), in front of moto at `MOTO_ENDPOINT`
+(`http://<service container IP>:5000`, set by the workflow). moto 5.2.5 ignores
+the tags of `CreatePolicy` and has no `ListTagsForResource`, so the proxy
+records the tags of `CreatePolicy`, answers `GET /tags?resourceArn=` and
+forwards everything else.
+
+What this lane does not check, and nothing else in the repository does either
+until a real account is used: a real MQTT TLS connect with the issued
+certificate; IRSA and EKS Pod Identity; whether AWS IoT evaluates the policy
+document the way `internal/iotcore.Document` intends; and the host name
+`DescribeEndpoint` returns (moto makes up a random one of the right shape).
+The controller's own decisions (never adopting a foreign policy, the rotation
+state machine) are covered by the unit tests, because `internal/controller`'s
+lifecycle types are not exported to this package.
+
 ## Running
 
 In CI, `.github/workflows/integration.yml` generates the certificates, makes the
@@ -74,6 +109,11 @@ unit profile):
 go test -tags integration -count=1 -coverpkg=./internal/dynsec/ -coverprofile=integration.cover ./test/integration/...
 go tool cover -func=integration.cover
 ```
+
+The moto lane has no devcontainer service: CI only. To run it by hand start
+`motoserver/moto:5.2.5`, set `MOTO_ENDPOINT=http://<its container IP>:5000` and
+run `go test -tags "integration iotcore" -run '^TestIoT' ./test/integration/...`
+on a host with a private (RFC 1918) address.
 
 Anywhere else, run `gen-certs.sh` into a directory, make the plugin's state
 with `init-dynsec.sh` inside the image, start a broker the way

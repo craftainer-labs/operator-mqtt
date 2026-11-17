@@ -26,7 +26,12 @@
   tests (build tag `integration`) with verified connections, after linting that
   package with `golangci-lint --build-tags integration`. A step-started
   container, not a `services:` one, because the certificates and the
-  configuration come from the checkout.
+  configuration come from the checkout. A second job, `moto`, runs the AWS IoT
+  Core code (build tags `integration iotcore`) against moto 5.2.5 as a
+  `services:` container, pinned by digest, reached at its private IP, with a
+  small tag-recording proxy in front (moto 5.2.5 ignores the tags of
+  `CreatePolicy` and lacks `ListTagsForResource`); the header of the file and
+  `../../test/integration/README.md` list what moto cannot check.
 - `release-extras.yml` — manually dispatched with a `tag` input, right after
   each `Release`: `gh workflow run release-extras.yml -f tag=vX.Y.Z`. Publishes
   the Helm chart (OCI), the OLM bundle image and the file-based catalog image
