@@ -177,6 +177,14 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			rejected(k8sClient.Update(ctx, a), "provider cannot be added or removed")
 		})
 
+		It("still admits an update that keeps the provider block", func() {
+			a := awsCluster("aws-update")
+			Expect(create(a)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "aws-update"}, a)).To(Succeed())
+			a.Labels = map[string]string{"a": "b"}
+			Expect(k8sClient.Update(ctx, a)).To(Succeed())
+		})
+
 		It("fails closed without a valid allowedNamespaces", func() {
 			b := clusterBroker("no-from")
 			b.Spec.AllowedNamespaces = common.AllowedNamespaces{}
