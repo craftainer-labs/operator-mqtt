@@ -23,7 +23,8 @@ All three are in the API group `mqtt.craftainer.dev/v1alpha1`. Samples are in
 | `MqttUser` | namespaced | A user on a broker (`serverRef`) with `acls` under the tenant root. Its login is written to a binding Secret. |
 
 Both broker kinds set `host`, an admin credentials Secret and optionally the
-protocol, port, Dynamic Security control topic and `topicRoot`. The tenant
+protocol (default `mqtts`), port (default `8883`; the controller applies both,
+not the CRD), Dynamic Security control topic and `topicRoot`. The tenant
 topic root is a template whose only placeholder is `{namespace}` (default
 `{namespace}/`); the operator prepends it to every ACL topic, so a user cannot
 reach another namespace's topics. On a `ClusterMqttBroker` it must contain
