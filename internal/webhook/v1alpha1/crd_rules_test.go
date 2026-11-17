@@ -97,8 +97,8 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			Expect(create(clusterBroker("defaults"))).To(Succeed())
 			got := &mqttv1alpha1.ClusterMqttBroker{}
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "defaults"}, got)).To(Succeed())
-			Expect(got.Spec.Port).To(HaveValue(Equal(int32(8883))))
-			Expect(got.Spec.Protocol).To(Equal(mqttv1alpha1.ProtocolMQTTS))
+			Expect(got.Spec.Port).To(BeNil(), "the port default is the controller's")
+			Expect(got.Spec.Protocol).To(BeEmpty(), "the protocol default is the controller's")
 			Expect(got.Spec.ControlTopic).To(Equal("$CONTROL/dynamic-security/v1"))
 			Expect(got.Spec.TopicRoot).To(Equal("{namespace}/"))
 			Expect(got.GetEndpoint()).To(Equal("mqtts://broker.messaging.svc:8883"))
@@ -158,6 +158,23 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "immutable"}, b)).To(Succeed())
 			b.Spec.Provider.Type = cloud.ProviderAzure
 			Expect(k8sClient.Update(ctx, b)).NotTo(Succeed())
+		})
+
+		It("refuses adding or removing the provider block", func() {
+			b := clusterBroker("self-hosted-to-aws")
+			Expect(create(b)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "self-hosted-to-aws"}, b)).To(Succeed())
+			b.Spec.AdminCredentialsSecretRef = nil
+			b.Spec.Provider = awsCluster("x").Spec.Provider
+			rejected(k8sClient.Update(ctx, b), "provider cannot be added or removed")
+
+			a := awsCluster("aws-to-self-hosted")
+			Expect(create(a)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "aws-to-self-hosted"}, a)).To(Succeed())
+			a.Spec.Provider = nil
+			a.Spec.Host = "broker.messaging.svc"
+			a.Spec.AdminCredentialsSecretRef = clusterBroker("x").Spec.AdminCredentialsSecretRef
+			rejected(k8sClient.Update(ctx, a), "provider cannot be added or removed")
 		})
 
 		It("fails closed without a valid allowedNamespaces", func() {
@@ -282,6 +299,24 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			rejected(create(b), "a namespaced server must use source Secret")
 
 			Expect(create(awsNamespaced("aws-ns-ok"))).To(Succeed())
+		})
+
+		It("refuses adding or removing the provider block", func() {
+			b := broker("ns-self-hosted-to-aws")
+			Expect(create(b)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(b), b)).To(Succeed())
+			p := awsNamespaced("x")
+			b.Spec.AdminCredentialsSecretRef = nil
+			b.Spec.Provider, b.Spec.Credentials = p.Spec.Provider, p.Spec.Credentials
+			rejected(k8sClient.Update(ctx, b), "provider cannot be added or removed")
+
+			a := awsNamespaced("ns-aws-to-self-hosted")
+			Expect(create(a)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(a), a)).To(Succeed())
+			a.Spec.Provider, a.Spec.Credentials = nil, nil
+			a.Spec.Host = "broker.team-a.svc"
+			a.Spec.AdminCredentialsSecretRef = &common.AdminSecretRef{Name: "admin"}
+			rejected(k8sClient.Update(ctx, a), "provider cannot be added or removed")
 		})
 
 		It("forbids the admin Secret with a provider", func() {

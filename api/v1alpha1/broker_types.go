@@ -40,15 +40,15 @@ type BrokerConfig struct {
 	// +optional
 	Host string `json:"host,omitempty"`
 
-	// port is the broker's TLS listener port.
-	// +kubebuilder:default=8883
+	// port is the broker's TLS listener port. Unset means 8883 (the controller's
+	// default, not the schema's, so a provider broker's discovered port can win).
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	Port *int32 `json:"port,omitempty"`
 
-	// protocol selects MQTT over TLS or over WebSocket with TLS.
-	// +kubebuilder:default=mqtts
+	// protocol selects MQTT over TLS or over WebSocket with TLS. Unset means
+	// mqtts (the controller's default, not the schema's).
 	// +optional
 	Protocol Protocol `json:"protocol,omitempty"`
 

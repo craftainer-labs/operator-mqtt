@@ -16,6 +16,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider.type == 'AWS'",message="only provider.type AWS is supported"
 // +kubebuilder:validation:XValidation:rule="!has(self.credentials) || has(self.provider)",message="credentials is allowed only with provider"
 // +kubebuilder:validation:XValidation:rule="!has(self.provider) || has(self.credentials)",message="a namespaced broker with a provider must set credentials with source Secret: it cannot use WorkloadIdentity"
+// +kubebuilder:validation:XValidation:rule="has(self.provider) == has(oldSelf.provider)",message="provider cannot be added or removed: a server cannot move between clouds or between cloud and self-hosted"
 type MqttBrokerSpec struct {
 	common.CloudServerCommon `json:",inline"`
 	BrokerConfig             `json:",inline"`

@@ -147,16 +147,17 @@ spec:
                 pattern: ^[A-Za-z0-9.:-]+$
                 type: string
               port:
-                default: 8883
-                description: port is the broker's TLS listener port.
+                description: |-
+                  port is the broker's TLS listener port. Unset means 8883 (the controller's
+                  default, not the schema's, so a provider broker's discovered port can win).
                 format: int32
                 maximum: 65535
                 minimum: 1
                 type: integer
               protocol:
-                default: mqtts
-                description: protocol selects MQTT over TLS or over WebSocket with
-                  TLS.
+                description: |-
+                  protocol selects MQTT over TLS or over WebSocket with TLS. Unset means
+                  mqtts (the controller's default, not the schema's).
                 enum:
                 - mqtts
                 - wss
@@ -310,6 +311,9 @@ spec:
             - message: 'a namespaced broker with a provider must set credentials with
                 source Secret: it cannot use WorkloadIdentity'
               rule: '!has(self.provider) || has(self.credentials)'
+            - message: 'provider cannot be added or removed: a server cannot move
+                between clouds or between cloud and self-hosted'
+              rule: has(self.provider) == has(oldSelf.provider)
           status:
             description: status defines the observed state of MqttBroker
             properties:

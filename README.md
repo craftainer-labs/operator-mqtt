@@ -36,7 +36,7 @@ whole topic levels (`#` only last), and reject a leading `/`, `$`, empty levels,
 A broker kind may name a managed service instead of a Mosquitto host: set
 `spec.provider` (`type: AWS`, with `aws.region` and an optional `aws.roleARN`;
 cluster brokers may also set `aws.endpointOverride`, honoured only with
-`--egress-mode=allow-private`, for emulators). The type is immutable. With a
+`--egress-mode=allow-private`, for emulators). The provider block cannot be added or removed after creation (a broker cannot move between a cloud and self-hosted), and its type is immutable. With a
 provider `adminCredentialsSecretRef` is forbidden and `host` is an optional
 override of the data endpoint the probe discovers (`status.discovered`, keys
 `endpoint` and `region`). `spec.credentials` is `source: WorkloadIdentity` (the

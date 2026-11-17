@@ -14,6 +14,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider.type == 'AWS'",message="only provider.type AWS is supported"
 // +kubebuilder:validation:XValidation:rule="!has(self.credentials) || has(self.provider)",message="credentials is allowed only with provider"
 // +kubebuilder:validation:XValidation:rule="!has(self.topicRoot) || self.topicRoot.contains('{namespace}')",message="topicRoot must contain {namespace} on a cluster-scoped broker, so tenants' topic roots do not overlap"
+// +kubebuilder:validation:XValidation:rule="has(self.provider) == has(oldSelf.provider)",message="provider cannot be added or removed: a server cannot move between clouds or between cloud and self-hosted"
 
 // ClusterMqttBrokerSpec defines the desired state of ClusterMqttBroker.
 type ClusterMqttBrokerSpec struct {
