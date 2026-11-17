@@ -179,7 +179,14 @@ func (e *iotExternal) Create(ctx context.Context, spec mqttv1alpha1.MqttUserSpec
 }
 
 func (e *iotExternal) create(ctx context.Context, spec mqttv1alpha1.MqttUserSpec) (binding.Data, error) {
-	if _, err := e.rules(spec); err != nil {
+	// Everything the policy can refuse is checked before a certificate exists,
+	// so a claim that cannot be served makes nothing (the account is only a
+	// placeholder here; it does not change the policy's length class).
+	rules, err := e.rules(spec)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := iotcore.Document(iotcore.Scope{Partition: "aws", Region: "us-east-1", Account: "000000000000"}, e.name, rules); err != nil {
 		return nil, err
 	}
 	c, err := e.be.iot(ctx)
@@ -219,7 +226,12 @@ func (e *iotExternal) create(ctx context.Context, spec mqttv1alpha1.MqttUserSpec
 // this claim is in the cloud once its certificate is gone, and the claim is
 // released on deletion without contacting it.
 func (e *iotExternal) refused(ctx context.Context, c *iotcore.Client, cert iotcore.Cert) error {
-	err := errors.Join(e.collision(), c.Retire(ctx, "", cert.ARN))
+	err := e.collision()
+	if rerr := c.Retire(ctx, "", cert.ARN); rerr != nil {
+		// The certificate is still there: status.externalId keeps naming it, so
+		// the next attempt ends it.
+		return errors.Join(err, rerr)
+	}
 	e.claim.SetExternalID("")
 	return errors.Join(err, e.persist(ctx))
 }
@@ -344,7 +356,10 @@ func (e *iotExternal) begin(ctx context.Context) (binding.Data, lifecycle.Genera
 		return nil, "", err
 	}
 	if err := c.Activate(ctx, e.name, cert); err != nil {
-		return nil, "", err
+		// Nothing records this certificate yet, so it is ended now: it grants
+		// nothing until it is active, and an active one is attached, which
+		// RotateFinish's sweep and Delete find.
+		return nil, "", errors.Join(err, c.Retire(ctx, e.name, cert.ARN))
 	}
 	e.claim.SetExternalID(cert.ARN)
 	return e.data(cert.PEM, cert.Key()), lifecycle.Generation(cert.ID), nil

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +81,17 @@ func TestDocumentRefusesWideningTopics(t *testing.T) {
 		if _, err := Document(testScope, "c", []Rule{{Topic: topic, Publish: true}}); !errors.Is(err, ErrInvalidTopic) {
 			t.Errorf("%q: %v", topic, err)
 		}
+	}
+}
+
+// A policy over IoT's 2048 characters is refused.
+func TestDocumentRefusesALongPolicy(t *testing.T) {
+	var rules []Rule
+	for i := range 40 {
+		rules = append(rules, Rule{Topic: "ns/" + strings.Repeat("x", 30) + strconv.Itoa(i), Publish: true, Subscribe: true})
+	}
+	if _, err := Document(testScope, "c", rules); !errors.Is(err, ErrInvalidTopic) {
+		t.Errorf("long policy: %v", err)
 	}
 }
 

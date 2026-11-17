@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// maxPolicyLen is the longest policy document IoT accepts, in characters
+// without whitespace.
+const maxPolicyLen = 2048
+
 // Rule is one ACL of a user: a topic filter (already under the tenant root)
 // and what the user may do with it.
 type Rule struct {
@@ -76,7 +80,13 @@ func Document(s Scope, clientID string, rules []Rule) (string, error) {
 		}
 	}
 	b, err := json.Marshal(doc)
-	return string(b), err
+	if err != nil {
+		return "", err
+	}
+	if len(b) > maxPolicyLen {
+		return "", fmt.Errorf("%w: the policy has %d characters, IoT allows %d", ErrInvalidTopic, len(b), maxPolicyLen)
+	}
+	return string(b), nil
 }
 
 // topicNames turns a topic filter into the resource names of the topics it

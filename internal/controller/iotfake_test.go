@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 	"github.com/aws/aws-sdk-go-v2/service/iot/types"
 	"github.com/aws/smithy-go"
+
+	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
 // fakeIoT is AWS IoT Core in memory behind API: the calls the package makes,
@@ -375,4 +377,4 @@ func (f *fakeIoT) ListTagsForResource(_ context.Context, in *iot.ListTagsForReso
 	return &iot.ListTagsForResourceOutput{Tags: items, NextToken: tokenPtr(next)}, nil
 }
 
-var _ API = (*fakeIoT)(nil)
+var _ iotcore.API = (*fakeIoT)(nil)

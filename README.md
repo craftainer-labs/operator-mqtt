@@ -87,7 +87,7 @@ so a claim waits until a follow-up lands the probe.
   (a filter such as `a/+/b` also allows `a/x/y/b`; the tenant root still bounds
   it), `%c` becomes `${iot:ClientId}`, and a topic with `*`, `?` or `%u` is
   refused. IoT limits a policy to 2048 characters without whitespace; a claim
-  with many ACLs can exceed it and is then refused by AWS. `maxConnections` is
+  with many ACLs can exceed it and is then refused, before any certificate is made. `maxConnections` is
   ignored.
 - A certificate cannot carry a tag, so a certificate made but not yet attached
   when the operator crashed (an `INACTIVE` one, which grants nothing) is ended

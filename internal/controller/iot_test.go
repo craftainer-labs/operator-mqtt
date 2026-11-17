@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -184,11 +185,22 @@ func TestIoTCreateFailures(t *testing.T) {
 		}
 	}
 
-	// A topic that would widen the policy is refused after the certificate.
-	e = iotExt(t, newFakeIoT())
+	// A topic that would widen the policy is refused before any certificate.
+	f = newFakeIoT()
+	e = iotExt(t, f)
 	wide := mqttv1alpha1.MqttUserSpec{ACLs: []mqttv1alpha1.ACL{{Topic: "a*b", Access: mqttv1alpha1.AccessPublish}}}
-	if _, err := e.Create(ctx, wide); !errors.Is(err, iotcore.ErrInvalidTopic) || err.Error() != "an ACL topic cannot be used on AWS IoT Core" {
-		t.Errorf("wide topic: %v", err)
+	if _, err := e.Create(ctx, wide); !errors.Is(err, iotcore.ErrInvalidTopic) || err.Error() != "an ACL topic cannot be used on AWS IoT Core" || f.joined() != "" {
+		t.Errorf("wide topic: %v, %q", err, f.joined())
+	}
+	// So is a policy that is too long for IoT.
+	f = newFakeIoT()
+	e = iotExt(t, f)
+	var long mqttv1alpha1.MqttUserSpec
+	for i := range 40 {
+		long.ACLs = append(long.ACLs, mqttv1alpha1.ACL{Topic: "t/" + strings.Repeat("x", 30) + strconv.Itoa(i), Access: mqttv1alpha1.AccessPublishSubscribe})
+	}
+	if _, err := e.Create(ctx, long); !errors.Is(err, iotcore.ErrInvalidTopic) || f.joined() != "" {
+		t.Errorf("long policy: %v, %q", err, f.joined())
 	}
 
 	// A certificate an earlier attempt made and never attached is ended first.
@@ -231,6 +243,18 @@ func TestIoTCreateRefusesAForeignPolicy(t *testing.T) {
 		if e.claim.GetExternalID() != "" || len(f.certs) != 0 || f.policies[iotPolicy].tags[iotcore.ClaimTag] != "other/claim/uid" {
 			t.Errorf("externalId = %q, certificates = %v", e.claim.GetExternalID(), f.certs)
 		}
+	}
+
+	// A certificate that cannot be ended stays named by status.externalId, so the
+	// next attempt ends it.
+	f := newFakeIoT()
+	if err := iotcore.New(f).CreatePolicy(ctx, iotPolicy, "other/claim/uid", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	e := iotExt(t, f)
+	f.fail["UpdateCertificate"] = errBroker
+	if _, err := e.Create(ctx, iotSpec); !errors.Is(err, lifecycle.ErrNameCollision) || !errors.Is(err, errBroker) || e.claim.GetExternalID() != iotARN+"cert/cert0001" {
+		t.Errorf("retire fails: %v, externalId %q", err, e.claim.GetExternalID())
 	}
 }
 
@@ -504,6 +528,11 @@ func TestIoTRotateFailures(t *testing.T) {
 		_, _, err := e.RotateBegin(ctx, iotSpec, cur, lifecycle.RotationState{})
 		if !errors.Is(err, errBroker) || e.claim.GetExternalID() != iotARN+"cert/cert0001" {
 			t.Errorf("begin, %s: %v, externalId %q", method, err, e.claim.GetExternalID())
+		}
+		// The certificate nothing records is ended; the failing method may be
+		// the one that ends it.
+		if method == "AttachPolicy" && (len(f.certs) != 1 || f.certs["cert0002"] != nil) {
+			t.Errorf("begin, %s left %v", method, f.certs)
 		}
 	}
 	e, _, cur := iotCreated(t)
