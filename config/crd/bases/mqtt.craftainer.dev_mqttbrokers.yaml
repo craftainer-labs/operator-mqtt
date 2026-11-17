@@ -53,7 +53,9 @@ spec:
             description: spec defines the desired state of MqttBroker
             properties:
               adminCredentialsSecretRef:
-                description: AdminCredentialsSecretRef names the admin credentials.
+                description: |-
+                  AdminCredentialsSecretRef names the data-plane admin credentials. Unset
+                  on a server that logs in with its cloud identity.
                 properties:
                   key:
                     description: Key limits the credentials to one key of the Secret.
@@ -85,6 +87,45 @@ spec:
                   rule: self.startsWith('$CONTROL/')
                 - message: 'controlTopic must not contain the wildcards + or #'
                   rule: '!self.contains(''+'') && !self.contains(''#'')'
+              credentials:
+                description: |-
+                  credentials are the credentials to the cloud API: a Secret in the
+                  broker's namespace (a namespaced broker cannot use WorkloadIdentity).
+                properties:
+                  secretRef:
+                    description: SecretRef names the Secret in the server's own namespace.
+                    properties:
+                      name:
+                        description: Name is the Secret's name.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the Secret's namespace: required on a cluster server (the
+                          controller accepts only the operator's own namespace), forbidden on a
+                          namespaced one.
+                        maxLength: 63
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  source:
+                    description: Source must be Secret.
+                    enum:
+                    - WorkloadIdentity
+                    - Secret
+                    type: string
+                required:
+                - source
+                type: object
+                x-kubernetes-validations:
+                - message: a namespaced server must use source Secret
+                  rule: self.source == 'Secret'
+                - message: secretRef is required
+                  rule: has(self.secretRef)
+                - message: secretRef.namespace is forbidden on a namespaced server
+                  rule: '!has(self.secretRef) || !has(self.secretRef.namespace)'
               healthCheckInterval:
                 description: |-
                   HealthCheckInterval is how often the server is probed (default 1m,
@@ -98,7 +139,9 @@ spec:
                 description: |-
                   host is the broker's host name or IP address. It never carries a scheme,
                   a port, a path or credentials: only letters, digits, dots, hyphens and
-                  colons (for an IPv6 address) are allowed.
+                  colons (for an IPv6 address) are allowed. It is required without
+                  spec.provider; with one it overrides the discovered data endpoint (for
+                  an emulator whose API and data plane are different processes).
                 maxLength: 253
                 minLength: 1
                 pattern: ^[A-Za-z0-9.:-]+$
@@ -118,6 +161,49 @@ spec:
                 - mqtts
                 - wss
                 type: string
+              provider:
+                description: |-
+                  provider says the broker is a managed cloud service (AWS IoT Core). Absent:
+                  a self-hosted Mosquitto, as before. With a provider,
+                  adminCredentialsSecretRef is forbidden.
+                properties:
+                  aws:
+                    description: 'aws holds the AWS settings: region and an optional
+                      role to assume.'
+                    properties:
+                      region:
+                        description: Region is the AWS region; the partition follows
+                          from it.
+                        maxLength: 32
+                        pattern: ^[a-z]{2}(-[a-z]+)+-[0-9]+$
+                        type: string
+                      roleARN:
+                        description: RoleARN, when set, is assumed with the source
+                          credentials.
+                        maxLength: 2048
+                        type: string
+                        x-kubernetes-validations:
+                        - message: 'roleARN must start with arn:'
+                          rule: self.startsWith('arn:')
+                    required:
+                    - region
+                    type: object
+                  type:
+                    description: type is the cloud. Only AWS is supported.
+                    enum:
+                    - AWS
+                    - GCP
+                    - Azure
+                    type: string
+                    x-kubernetes-validations:
+                    - message: provider.type is immutable
+                      rule: self == oldSelf
+                required:
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: aws is required with type AWS and forbidden otherwise
+                  rule: 'self.type == ''AWS'' ? has(self.aws) : !has(self.aws)'
               proxyURL:
                 description: |-
                   ProxyURL is an http, https or socks5 proxy; unset uses the process
@@ -207,14 +293,23 @@ spec:
                 - message: topicRoot must not start with /, contain an empty topic
                     level (//) or contain ..
                   rule: '!self.startsWith(''/'') && !self.contains(''//'') && !self.contains(''..'')'
-            required:
-            - adminCredentialsSecretRef
-            - host
             type: object
             x-kubernetes-validations:
             - message: 'adminCredentialsSecretRef.namespace must not be set: the Secret
                 is in the MqttBroker''s namespace'
-              rule: '!has(self.adminCredentialsSecretRef.namespace)'
+              rule: '!has(self.adminCredentialsSecretRef) || !has(self.adminCredentialsSecretRef.namespace)'
+            - message: adminCredentialsSecretRef is required without provider and
+                forbidden with one
+              rule: 'has(self.provider) ? !has(self.adminCredentialsSecretRef) : has(self.adminCredentialsSecretRef)'
+            - message: host is required without provider
+              rule: has(self.provider) || (has(self.host) && size(self.host) > 0)
+            - message: only provider.type AWS is supported
+              rule: '!has(self.provider) || self.provider.type == ''AWS'''
+            - message: credentials is allowed only with provider
+              rule: '!has(self.credentials) || has(self.provider)'
+            - message: 'a namespaced broker with a provider must set credentials with
+                source Secret: it cannot use WorkloadIdentity'
+              rule: '!has(self.provider) || has(self.credentials)'
           status:
             description: status defines the observed state of MqttBroker
             properties:
@@ -279,6 +374,20 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              discovered:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Discovered is what the operator read from the cloud for a cloud server:
+                  endpoint, port, resourceId, accountId and region (ADR 0002, section
+                  16.1). The probe (a cloud Prober of package probe) or the operator's
+                  controller fills it; claims read it from the cached server. A
+                  self-hosted server leaves it empty.
+                maxProperties: 10
+                type: object
+                x-kubernetes-validations:
+                - message: values are at most 512 characters
+                  rule: self.all(k, size(self[k]) <= 512)
               lastProbeTime:
                 description: LastProbeTime is when the server was last probed.
                 format: date-time

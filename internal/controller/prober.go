@@ -35,11 +35,35 @@ type Prober struct {
 	Check ProbeFunc
 }
 
-var _ probe.Prober = Prober{}
+var _ probe.CloudProber = Prober{}
+
+// ProbeCloud implements probe.CloudProber: the version of a self-hosted
+// broker. A broker with a provider is not probed yet.
+func (p Prober) ProbeCloud(ctx context.Context, srv server.CloudServer, cc server.CloudConnection) (probe.CloudResult, error) {
+	if _, err := brokerConfigOf(srv); err != nil {
+		return probe.CloudResult{}, err
+	}
+	if hasProvider(srv) {
+		return probe.CloudResult{}, categoryOnly(ErrCloudNotImplemented)
+	}
+	version, err := p.Probe(ctx, srv, cc.Connection)
+	return probe.CloudResult{Version: version}, err
+}
+
+// hasProvider reports whether a broker of either kind sets spec.provider.
+func hasProvider(srv server.CloudServer) bool {
+	switch s := srv.(type) {
+	case *mqttv1alpha1.ClusterMqttBroker:
+		return s.Spec.Provider != nil
+	case *mqttv1alpha1.MqttBroker:
+		return s.Spec.Provider != nil
+	}
+	return false
+}
 
 // Probe returns the version of the broker srv names, or an error that names
 // only a category of failure.
-func (p Prober) Probe(ctx context.Context, srv server.Server, conn server.Connection) (string, error) {
+func (p Prober) Probe(ctx context.Context, srv server.CloudServer, conn server.Connection) (string, error) {
 	spec, err := brokerConfigOf(srv)
 	if err != nil {
 		return "", err
@@ -82,7 +106,7 @@ func categoryOnly(err error) error {
 }
 
 // brokerConfigOf returns the MQTT fields of a broker kind of this operator.
-func brokerConfigOf(srv server.Server) (mqttv1alpha1.BrokerConfig, error) {
+func brokerConfigOf(srv server.CloudServer) (mqttv1alpha1.BrokerConfig, error) {
 	switch s := srv.(type) {
 	case *mqttv1alpha1.ClusterMqttBroker:
 		return s.Spec.BrokerConfig, nil

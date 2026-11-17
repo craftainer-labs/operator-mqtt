@@ -143,21 +143,24 @@ type brokerObject struct {
 	generation int64
 	spec       mqttv1alpha1.BrokerConfig
 	conditions []metav1.Condition
+	// cloud says spec.provider is set.
+	cloud bool
 }
 
 // backend resolves ref for a claim in ns: the connection settings through
-// server.Resolve (which enforces allowedNamespaces), the broker's own fields, and
-// a connection that dials through the egress policy and the broker's proxy. Its
+// server.ResolveCloud (which enforces allowedNamespaces and reads the admin
+// Secret, if the broker names one), the broker's own fields, and a connection that dials through the egress policy and the broker's proxy. Its
 // errors are coarse: conditions show a fixed text, the log has the raw error.
 func (c Config) backend(ctx context.Context, ns string, ref common.ServerRef) (*backend, error) {
 	key := brokerKey(ns, ref)
-	conn, err := server.Resolve(ctx, c.Client, ns, ref, server.WithOperatorNamespace(c.OperatorNamespace))
+	cc, err := server.ResolveCloud(ctx, c.Client, ns, ref, server.WithOperatorNamespace(c.OperatorNamespace))
+	conn := cc.Connection
 	if err != nil {
 		// A broker that is gone or no longer usable keeps no connection. A
 		// namespace the broker does not serve says nothing about the broker
 		// (other namespaces share the entry), so it is not on this list.
 		if errors.Is(err, server.ErrServerNotFound) || errors.Is(err, server.ErrInvalidServer) ||
-			errors.Is(err, server.ErrAdminSecretNamespaceForbidden) {
+			errors.Is(err, server.ErrAdminSecretNamespaceForbidden) || errors.Is(err, server.ErrCredentialsSecretNamespaceForbidden) {
 			c.Cache.Forget(key)
 		}
 		return nil, coarse(ctx, "resolve the broker", err)
@@ -165,6 +168,9 @@ func (c Config) backend(ctx context.Context, ns string, ref common.ServerRef) (*
 	obj, err := c.fetchBroker(ctx, ns, ref)
 	if err != nil {
 		return nil, coarse(ctx, "read the broker", err)
+	}
+	if obj.cloud {
+		return nil, ErrCloudNotImplemented
 	}
 	if obj.spec.Protocol == mqttv1alpha1.ProtocolWSS {
 		return nil, fmt.Errorf("%w: wss", ErrUnsupportedProtocol)
@@ -216,11 +222,11 @@ func (c Config) fetchBroker(ctx context.Context, ns string, ref common.ServerRef
 	if ref.Kind == mqttv1alpha1.KindClusterMqttBroker {
 		var s mqttv1alpha1.ClusterMqttBroker
 		err := c.Client.Get(ctx, client.ObjectKey{Name: ref.Name}, &s)
-		return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions}, err
+		return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions, s.Spec.Provider != nil}, err
 	}
 	var s mqttv1alpha1.MqttBroker
 	err := c.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, &s)
-	return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions}, err
+	return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions, s.Spec.Provider != nil}, err
 }
 
 // stamp identifies what a cached connection was made from: the broker object

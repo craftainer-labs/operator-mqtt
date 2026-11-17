@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
+	"github.com/craftainer-labs/lib-operator-go/pkg/cloud"
 	"github.com/craftainer-labs/lib-operator-go/pkg/conditions"
 	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
@@ -354,6 +355,8 @@ func TestCoarse(t *testing.T) {
 		{"not found", wrap(server.ErrServerNotFound), "the referenced broker was not found", false},
 		{"namespace", wrap(server.ErrNamespaceNotAllowed), "the claim's namespace is not allowed by the broker", false},
 		{"admin namespace", wrap(server.ErrAdminSecretNamespaceForbidden), "the broker's admin credentials are not usable", false},
+		{"credentials namespace", wrap(server.ErrCredentialsSecretNamespaceForbidden), "the broker's cloud credentials are not usable", false},
+		{"credentials unavailable", wrap(server.ErrCredentialsUnavailable), "the broker's cloud credentials are not usable", false},
 		{"invalid server", wrap(server.ErrInvalidServer), "the broker's configuration or admin credentials are not usable", false},
 		{"operator namespace", wrap(server.ErrOperatorNamespaceUnset), "the broker's configuration or admin credentials are not usable", false},
 		{"egress", fmt.Errorf("%w: %w", dynsec.ErrUnavailable, wrap(egress.ErrBlocked)), "the connection to the broker was refused by the egress policy", true},
@@ -388,7 +391,7 @@ func TestCoarse(t *testing.T) {
 	// and so does an error that was made coarse.
 	for _, err := range []error{
 		fmt.Errorf("%w: %q", lifecycle.ErrNameCollision, "n"), ErrBindingNotUsable, ErrBrokerNotReady, fmt.Errorf("%w: x", ErrInvalidACL),
-		fmt.Errorf("%w: wss", ErrUnsupportedProtocol),
+		fmt.Errorf("%w: wss", ErrUnsupportedProtocol), ErrCloudNotImplemented,
 	} {
 		if got := coarse(ctx, "op", err); got.Error() != err.Error() || !errors.Is(got, err) {
 			t.Errorf("%v changed to %v", err, got)
@@ -535,5 +538,23 @@ func TestNames(t *testing.T) {
 	if brokerKey("ns1", ref) == brokerKey("ns2", ref) || brokerKey("ns1", cluster) != brokerKey("ns2", cluster) ||
 		brokerKey("ns", ref) == brokerKey("ns", cluster) {
 		t.Error("broker keys")
+	}
+}
+
+// A broker with a provider has no backend in this release: the claim gets a
+// fixed text and the probe a category, and nothing is connected.
+func TestBackendRefusesACloudBrokerForNow(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, nil)
+	srv := &mqttv1alpha1.ClusterMqttBroker{ObjectMeta: metav1.ObjectMeta{Name: h.server.Name + "-aws"}}
+	srv.Spec.Provider = &mqttv1alpha1.ClusterProvider{
+		Type: cloud.ProviderAWS, AWS: &cloud.AWSClusterBlock{AWSBlock: cloud.AWSBlock{Region: "eu-west-1"}},
+	}
+	srv.Spec.AllowedNamespaces = common.AllowedNamespaces{From: common.NamespacesAll}
+	h.must(env.Client.Create(ctx, srv))
+	t.Cleanup(func() { _ = env.Client.Delete(ctx, srv) })
+	ref := common.ServerRef{Kind: mqttv1alpha1.KindClusterMqttBroker, Name: srv.Name}
+	if _, err := h.cfg.backend(ctx, h.ns, ref); !errors.Is(err, ErrCloudNotImplemented) {
+		t.Errorf("cloud broker: %v", err)
 	}
 }

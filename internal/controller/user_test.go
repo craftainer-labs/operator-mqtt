@@ -559,7 +559,7 @@ func TestUserOnANamespacedBroker(t *testing.T) {
 	}))
 	broker := &mqttv1alpha1.MqttBroker{ObjectMeta: metav1.ObjectMeta{Name: "team", Namespace: h.ns}}
 	broker.Spec.Host = "team.example.test"
-	broker.Spec.AdminCredentialsSecretRef = common.AdminSecretRef{Name: "team-admin"}
+	broker.Spec.AdminCredentialsSecretRef = &common.AdminSecretRef{Name: "team-admin"}
 	broker.Spec.TopicRoot = "tenants/{namespace}/mqtt/"
 	h.must(env.Client.Create(ctx, broker))
 	u := h.user("gateway", func(u *mqttv1alpha1.MqttUser) {

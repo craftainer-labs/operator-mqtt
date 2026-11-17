@@ -31,6 +31,23 @@ reach another namespace's topics. On a `ClusterMqttBroker` it must contain
 whole topic levels (`#` only last), and reject a leading `/`, `$`, empty levels,
 `..` and braces. The CRD descriptions list every rule.
 
+### Cloud brokers (AWS IoT Core)
+
+A broker kind may name a managed service instead of a Mosquitto host: set
+`spec.provider` (`type: AWS`, with `aws.region` and an optional `aws.roleARN`;
+cluster brokers may also set `aws.endpointOverride`, honoured only with
+`--egress-mode=allow-private`, for emulators). The type is immutable. With a
+provider `adminCredentialsSecretRef` is forbidden and `host` is an optional
+override of the data endpoint the probe discovers (`status.discovered`, keys
+`endpoint` and `region`). `spec.credentials` is `source: WorkloadIdentity` (the
+default, cluster brokers only: IRSA or EKS Pod Identity) or `source: Secret`
+(keys `accessKeyId`, `secretAccessKey`, optional `sessionToken`); a namespaced
+`MqttBroker` must use `Secret`, in its own namespace.
+
+This release carries the API only: a broker with a provider is reported
+`Ready=False` (`ServerUnreachable`) and its claims fail with a fixed message, until the AWS backend
+(IoT certificates and policies, in the binding Secret) lands.
+
 ## Controllers
 
 One controller, `MqttUser`, built on `lifecycle.Reconcile` of lib-operator-go.

@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
+	"github.com/craftainer-labs/lib-operator-go/pkg/cloud"
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 )
 
@@ -39,8 +40,8 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 		return &mqttv1alpha1.ClusterMqttBroker{
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 			Spec: mqttv1alpha1.ClusterMqttBrokerSpec{
-				ServerCommon: common.ServerCommon{
-					AdminCredentialsSecretRef: common.AdminSecretRef{Name: "admin", Namespace: "craftainer-system"},
+				CloudServerCommon: common.CloudServerCommon{
+					AdminCredentialsSecretRef: &common.AdminSecretRef{Name: "admin", Namespace: "craftainer-system"},
 				},
 				BrokerConfig:      mqttv1alpha1.BrokerConfig{Host: "broker.messaging.svc"},
 				AllowedNamespaces: common.AllowedNamespaces{From: common.NamespacesAll},
@@ -51,8 +52,30 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 		return &mqttv1alpha1.MqttBroker{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 			Spec: mqttv1alpha1.MqttBrokerSpec{
-				ServerCommon: common.ServerCommon{AdminCredentialsSecretRef: common.AdminSecretRef{Name: "admin"}},
-				BrokerConfig: mqttv1alpha1.BrokerConfig{Host: "broker.team-a.svc"},
+				CloudServerCommon: common.CloudServerCommon{AdminCredentialsSecretRef: &common.AdminSecretRef{Name: "admin"}},
+				BrokerConfig:      mqttv1alpha1.BrokerConfig{Host: "broker.team-a.svc"},
+			},
+		}
+	}
+	awsCluster := func(name string) *mqttv1alpha1.ClusterMqttBroker {
+		return &mqttv1alpha1.ClusterMqttBroker{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: mqttv1alpha1.ClusterMqttBrokerSpec{
+				Provider: &mqttv1alpha1.ClusterProvider{
+					Type: cloud.ProviderAWS, AWS: &cloud.AWSClusterBlock{AWSBlock: cloud.AWSBlock{Region: "eu-west-1"}},
+				},
+				AllowedNamespaces: common.AllowedNamespaces{From: common.NamespacesAll},
+			},
+		}
+	}
+	awsNamespaced := func(name string) *mqttv1alpha1.MqttBroker {
+		return &mqttv1alpha1.MqttBroker{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: mqttv1alpha1.MqttBrokerSpec{
+				Provider: &mqttv1alpha1.Provider{
+					Type: cloud.ProviderAWS, AWS: &cloud.AWSBlock{Region: "eu-west-1"},
+				},
+				Credentials: &cloud.NamespacedCredentials{Source: cloud.SourceSecret, SecretRef: &cloud.SecretRef{Name: "aws"}},
 			},
 		}
 	}
@@ -85,6 +108,56 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			b := clusterBroker("no-ns")
 			b.Spec.AdminCredentialsSecretRef.Namespace = ""
 			rejected(create(b), "adminCredentialsSecretRef.namespace is required")
+		})
+
+		It("takes an AWS provider with no admin Secret and no host", func() {
+			b := awsCluster("aws")
+			Expect(create(b)).To(Succeed())
+			got := &mqttv1alpha1.ClusterMqttBroker{}
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "aws"}, got)).To(Succeed())
+			Expect(got.Spec.Provider.AWS.Region).To(Equal("eu-west-1"))
+			Expect(got.Spec.Host).To(BeEmpty())
+		})
+
+		It("forbids the admin Secret with a provider, and requires it without one", func() {
+			b := awsCluster("aws-admin")
+			b.Spec.AdminCredentialsSecretRef = &common.AdminSecretRef{Name: "admin", Namespace: "craftainer-system"}
+			rejected(create(b), "adminCredentialsSecretRef is required without provider and forbidden with one")
+
+			b = clusterBroker("no-admin")
+			b.Spec.AdminCredentialsSecretRef = nil
+			rejected(create(b), "adminCredentialsSecretRef is required without provider and forbidden with one")
+		})
+
+		It("requires a host without a provider", func() {
+			b := clusterBroker("no-host")
+			b.Spec.Host = ""
+			rejected(create(b), "host is required without provider")
+		})
+
+		It("accepts a host override and endpointOverride with a provider", func() {
+			b := awsCluster("aws-override")
+			b.Spec.Host = "10.0.0.7"
+			b.Spec.Provider.AWS.EndpointOverride = "http://10.0.0.8:5000"
+			Expect(create(b)).To(Succeed())
+		})
+
+		It("refuses a provider other than AWS and credentials without a provider", func() {
+			b := awsCluster("azure")
+			b.Spec.Provider.Type = cloud.ProviderAzure
+			rejected(create(b), "provider")
+
+			b = clusterBroker("creds-only")
+			b.Spec.Credentials = &cloud.Credentials{Source: cloud.SourceWorkloadIdentity}
+			rejected(create(b), "credentials is allowed only with provider")
+		})
+
+		It("keeps provider.type immutable", func() {
+			b := awsCluster("immutable")
+			Expect(create(b)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "immutable"}, b)).To(Succeed())
+			b.Spec.Provider.Type = cloud.ProviderAzure
+			Expect(k8sClient.Update(ctx, b)).NotTo(Succeed())
 		})
 
 		It("fails closed without a valid allowedNamespaces", func() {
@@ -197,6 +270,30 @@ var _ = Describe("The mqtt.craftainer.dev CRDs", func() {
 			b := broker("with-ns")
 			b.Spec.AdminCredentialsSecretRef.Namespace = "elsewhere"
 			rejected(create(b), "adminCredentialsSecretRef.namespace must not be set")
+		})
+
+		It("requires credentials with source Secret and a provider", func() {
+			b := awsNamespaced("aws-ns")
+			b.Spec.Credentials = nil
+			rejected(create(b), "must set credentials with source Secret")
+
+			b = awsNamespaced("aws-ns-wi")
+			b.Spec.Credentials = &cloud.NamespacedCredentials{Source: cloud.SourceWorkloadIdentity}
+			rejected(create(b), "a namespaced server must use source Secret")
+
+			Expect(create(awsNamespaced("aws-ns-ok"))).To(Succeed())
+		})
+
+		It("forbids the admin Secret with a provider", func() {
+			b := awsNamespaced("aws-ns-admin")
+			b.Spec.AdminCredentialsSecretRef = &common.AdminSecretRef{Name: "admin"}
+			rejected(create(b), "adminCredentialsSecretRef is required without provider and forbidden with one")
+		})
+
+		It("requires a host without a provider", func() {
+			b := broker("ns-no-host")
+			b.Spec.Host = ""
+			rejected(create(b), "host is required without provider")
 		})
 
 		It("rejects a host that is not a host name in the webhook", func() {

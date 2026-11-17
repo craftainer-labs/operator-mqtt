@@ -31,11 +31,14 @@ const (
 type BrokerConfig struct {
 	// host is the broker's host name or IP address. It never carries a scheme,
 	// a port, a path or credentials: only letters, digits, dots, hyphens and
-	// colons (for an IPv6 address) are allowed.
+	// colons (for an IPv6 address) are allowed. It is required without
+	// spec.provider; with one it overrides the discovered data endpoint (for
+	// an emulator whose API and data plane are different processes).
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9.:-]+$`
-	Host string `json:"host"`
+	// +optional
+	Host string `json:"host,omitempty"`
 
 	// port is the broker's TLS listener port.
 	// +kubebuilder:default=8883
@@ -77,8 +80,13 @@ type BrokerConfig struct {
 }
 
 // Endpoint returns the broker's URL, scheme://host:port, from the defaults
-// where the fields are unset. It is what a server kind's GetEndpoint returns.
+// where the fields are unset, and "" when there is no host (a cloud server
+// that has not set the override). It is what a server kind's GetEndpoint
+// returns.
 func (c *BrokerConfig) Endpoint() string {
+	if c.Host == "" {
+		return ""
+	}
 	protocol := c.Protocol
 	if protocol == "" {
 		protocol = ProtocolMQTTS

@@ -31,10 +31,12 @@ func invalid(kind, name string, errs field.ErrorList) error {
 
 // validateBroker checks the host and the proxy URL of a broker, for both
 // broker kinds. Neither value appears in an error.
-func validateBroker(spec *mqttv1alpha1.BrokerConfig, proxyURL string) field.ErrorList {
+func validateBroker(spec *mqttv1alpha1.BrokerConfig, proxyURL string, cloud bool) field.ErrorList {
 	var errs field.ErrorList
 	path := field.NewPath("spec")
-	if !validHost(spec.Host) {
+	// With a provider the host is an optional override of the discovered data
+	// endpoint; without one it is required.
+	if (spec.Host != "" || !cloud) && !validHost(spec.Host) {
 		errs = append(errs, field.Invalid(path.Child("host"), redacted, "must be a host name or an IP address"))
 	}
 	if proxyURL != "" {

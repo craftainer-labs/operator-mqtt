@@ -49,5 +49,5 @@ func (v *ClusterMqttBrokerValidator) ValidateDelete(_ context.Context, _ *mqttv1
 }
 
 func (v *ClusterMqttBrokerValidator) validate(obj *mqttv1alpha1.ClusterMqttBroker) error {
-	return invalid("ClusterMqttBroker", obj.GetName(), validateBroker(&obj.Spec.BrokerConfig, obj.Spec.ProxyURL))
+	return invalid("ClusterMqttBroker", obj.GetName(), validateBroker(&obj.Spec.BrokerConfig, obj.Spec.ProxyURL, obj.Spec.Provider != nil))
 }
