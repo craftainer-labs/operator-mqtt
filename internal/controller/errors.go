@@ -33,6 +33,9 @@ var (
 	// ErrUnsupportedProtocol means the broker is reached by a protocol the
 	// client does not speak (wss).
 	ErrUnsupportedProtocol = errors.New("the broker's protocol is not supported")
+	// ErrCloudNotImplemented means the broker has a provider whose backend this
+	// release does not run yet.
+	ErrCloudNotImplemented = errors.New("the broker's cloud provider is not supported yet")
 	// ErrAdminCredentials means the admin Secret lacks the username or password.
 	ErrAdminCredentials = errors.New("the admin Secret needs the keys username and password")
 )
@@ -88,6 +91,7 @@ func isEgress(err error) bool {
 // kinds they are wrapped in.
 var rules = []rule{
 	{is(lifecycle.ErrNameCollision), "", false},
+	{is(ErrCloudNotImplemented), "", false},
 	{is(ErrBindingNotUsable), "", false},
 	{is(ErrBrokerNotReady), "", false},
 	{is(ErrInvalidACL), "", false},
@@ -95,6 +99,8 @@ var rules = []rule{
 	{is(server.ErrServerNotFound), "the referenced broker was not found", false},
 	{is(server.ErrNamespaceNotAllowed), "the claim's namespace is not allowed by the broker", false},
 	{is(server.ErrAdminSecretNamespaceForbidden), "the broker's admin credentials are not usable", false},
+	{is(server.ErrCredentialsSecretNamespaceForbidden), "the broker's cloud credentials are not usable", false},
+	{is(server.ErrCredentialsUnavailable), "the broker's cloud credentials are not usable", false},
 	{is(server.ErrInvalidServer), "the broker's configuration or admin credentials are not usable", false},
 	{is(server.ErrOperatorNamespaceUnset), "the broker's configuration or admin credentials are not usable", false},
 	{isEgress, "the connection to the broker was refused by the egress policy", true},

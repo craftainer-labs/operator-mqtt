@@ -23,13 +23,33 @@ All three are in the API group `mqtt.craftainer.dev/v1alpha1`. Samples are in
 | `MqttUser` | namespaced | A user on a broker (`serverRef`) with `acls` under the tenant root. Its login is written to a binding Secret. |
 
 Both broker kinds set `host`, an admin credentials Secret and optionally the
-protocol, port, Dynamic Security control topic and `topicRoot`. The tenant
+protocol (default `mqtts`), port (default `8883`; the controller applies both,
+not the CRD), Dynamic Security control topic and `topicRoot`. The tenant
 topic root is a template whose only placeholder is `{namespace}` (default
 `{namespace}/`); the operator prepends it to every ACL topic, so a user cannot
 reach another namespace's topics. On a `ClusterMqttBroker` it must contain
 `{namespace}`. ACL topics are relative to the root, may use `+` and `#` as
 whole topic levels (`#` only last), and reject a leading `/`, `$`, empty levels,
 `..` and braces. The CRD descriptions list every rule.
+
+### Cloud brokers (AWS IoT Core)
+
+A broker kind may name a managed service instead of a Mosquitto host: set
+`spec.provider` (`type: AWS`, with `aws.region` and an optional `aws.roleARN`;
+cluster brokers may also set `aws.endpointOverride`, honoured only with
+`--egress-mode=allow-private`, for emulators). The provider block cannot be
+added or removed after creation (a broker cannot move between a cloud and
+self-hosted), and its type is immutable. With a
+provider `adminCredentialsSecretRef` is forbidden and `host` is an optional
+override of the data endpoint the probe discovers (`status.discovered`, keys
+`endpoint` and `region`). `spec.credentials` is `source: WorkloadIdentity` (the
+default, cluster brokers only: IRSA or EKS Pod Identity) or `source: Secret`
+(keys `accessKeyId`, `secretAccessKey`, optional `sessionToken`); a namespaced
+`MqttBroker` must use `Secret`, in its own namespace.
+
+This release carries the API only: a broker with a provider is reported
+`Ready=False` (`ServerUnreachable`) and its claims fail with a fixed message, until the AWS backend
+(IoT certificates and policies, in the binding Secret) lands.
 
 ## Controllers
 

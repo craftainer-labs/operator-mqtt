@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
+	"github.com/craftainer-labs/lib-operator-go/pkg/cloud"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 )
@@ -17,9 +18,9 @@ import (
 // The claim kind and the server kinds must satisfy the interfaces the
 // lib-operator-go reconciler is written against.
 var (
-	_ lifecycle.Claim = (*MqttUser)(nil)
-	_ server.Server   = (*MqttBroker)(nil)
-	_ server.Server   = (*ClusterMqttBroker)(nil)
+	_ lifecycle.Claim    = (*MqttUser)(nil)
+	_ server.CloudServer = (*MqttBroker)(nil)
+	_ server.CloudServer = (*ClusterMqttBroker)(nil)
 )
 
 func TestAddToSchemeRegistersEveryKind(t *testing.T) {
@@ -54,10 +55,10 @@ func TestEndpointUsesTheDefaults(t *testing.T) {
 func TestMqttBrokerAccessors(t *testing.T) {
 	g := NewWithT(t)
 	b := &MqttBroker{Spec: MqttBrokerSpec{
-		ServerCommon: common.ServerCommon{ProxyURL: "http://proxy:3128"},
-		BrokerConfig: BrokerConfig{Host: "broker"},
+		CloudServerCommon: common.CloudServerCommon{ProxyURL: "http://proxy:3128"},
+		BrokerConfig:      BrokerConfig{Host: "broker"},
 	}}
-	g.Expect(b.GetCommon().ProxyURL).To(Equal("http://proxy:3128"))
+	g.Expect(b.GetCloudCommon().ProxyURL).To(Equal("http://proxy:3128"))
 	g.Expect(b.GetEndpoint()).To(Equal("mqtts://broker:8883"))
 	g.Expect(b.GetAllowedNamespaces()).To(BeNil())
 	b.GetServerStatus().ServerVersion = "2.0.22"
@@ -67,11 +68,11 @@ func TestMqttBrokerAccessors(t *testing.T) {
 func TestClusterMqttBrokerAccessors(t *testing.T) {
 	g := NewWithT(t)
 	b := &ClusterMqttBroker{Spec: ClusterMqttBrokerSpec{
-		ServerCommon:      common.ServerCommon{ProxyURL: "http://proxy:3128"},
+		CloudServerCommon: common.CloudServerCommon{ProxyURL: "http://proxy:3128"},
 		BrokerConfig:      BrokerConfig{Host: "broker"},
 		AllowedNamespaces: common.AllowedNamespaces{From: common.NamespacesAll},
 	}}
-	g.Expect(b.GetCommon().ProxyURL).To(Equal("http://proxy:3128"))
+	g.Expect(b.GetCloudCommon().ProxyURL).To(Equal("http://proxy:3128"))
 	g.Expect(b.GetEndpoint()).To(Equal("mqtts://broker:8883"))
 	g.Expect(b.GetAllowedNamespaces().From).To(Equal(common.NamespacesAll))
 	b.GetServerStatus().ServerVersion = "2.0.22"
@@ -178,4 +179,50 @@ func TestTopicProblem(t *testing.T) {
 	}
 	// The limit counts characters, not bytes.
 	g.Expect(TopicProblem(strings.Repeat("é", 256))).To(BeEmpty())
+}
+
+// A cloud broker with no host override has no endpoint of its own: the probe and
+// the claims take it from status.discovered.
+func TestEndpointIsEmptyWithoutAHost(t *testing.T) {
+	g := NewWithT(t)
+	g.Expect((&BrokerConfig{}).Endpoint()).To(BeEmpty())
+	g.Expect((&MqttBroker{}).GetEndpoint()).To(BeEmpty())
+	g.Expect((&ClusterMqttBroker{}).GetEndpoint()).To(BeEmpty())
+}
+
+func TestCredentialsSecret(t *testing.T) {
+	g := NewWithT(t)
+	ref := &cloud.SecretRef{Name: "aws", Namespace: "ops"}
+
+	c := &ClusterMqttBroker{}
+	name, _ := c.GetCredentialsSecret()
+	g.Expect(name).To(BeEmpty(), "no credentials")
+	c.Spec.Credentials = &cloud.Credentials{Source: cloud.SourceWorkloadIdentity}
+	name, _ = c.GetCredentialsSecret()
+	g.Expect(name).To(BeEmpty(), "workload identity")
+	c.Spec.Credentials = &cloud.Credentials{Source: cloud.SourceSecret, SecretRef: ref}
+	name, ns := c.GetCredentialsSecret()
+	g.Expect(name).To(Equal("aws"))
+	g.Expect(ns).To(Equal("ops"))
+
+	n := &MqttBroker{ObjectMeta: metav1.ObjectMeta{Namespace: "team"}}
+	name, _ = n.GetCredentialsSecret()
+	g.Expect(name).To(BeEmpty(), "no credentials")
+	n.Spec.Credentials = &cloud.NamespacedCredentials{Source: cloud.SourceSecret, SecretRef: &cloud.SecretRef{Name: "aws"}}
+	name, ns = n.GetCredentialsSecret()
+	g.Expect(name).To(Equal("aws"))
+	g.Expect(ns).To(Equal("team"), "a namespaced broker's Secret is in its own namespace")
+}
+
+func TestProviderIsAWS(t *testing.T) {
+	g := NewWithT(t)
+	var nilCluster *ClusterProvider
+	var nilNamespaced *Provider
+	g.Expect(nilCluster.IsAWS()).To(BeFalse())
+	g.Expect(nilNamespaced.IsAWS()).To(BeFalse())
+	g.Expect((&ClusterProvider{Type: cloud.ProviderAWS}).IsAWS()).To(BeFalse(), "no aws block")
+	g.Expect((&Provider{Type: cloud.ProviderAWS}).IsAWS()).To(BeFalse(), "no aws block")
+	g.Expect((&ClusterProvider{Type: cloud.ProviderAWS, AWS: &cloud.AWSClusterBlock{}}).IsAWS()).To(BeTrue())
+	g.Expect((&Provider{Type: cloud.ProviderAWS, AWS: &cloud.AWSBlock{}}).IsAWS()).To(BeTrue())
+	g.Expect((&Provider{Type: cloud.ProviderAzure, AWS: &cloud.AWSBlock{}}).IsAWS()).To(BeFalse())
 }

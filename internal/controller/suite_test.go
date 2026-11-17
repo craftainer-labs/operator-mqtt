@@ -337,7 +337,7 @@ func newHarness(t *testing.T, mutate func(*mqttv1alpha1.ClusterMqttBroker)) *har
 	}
 	srv := &mqttv1alpha1.ClusterMqttBroker{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	srv.Spec.Host = "mqtt.example.test"
-	srv.Spec.AdminCredentialsSecretRef = common.AdminSecretRef{Name: admin.Name, Namespace: h.ops}
+	srv.Spec.AdminCredentialsSecretRef = &common.AdminSecretRef{Name: admin.Name, Namespace: h.ops}
 	srv.Spec.AllowedNamespaces = common.AllowedNamespaces{From: common.NamespacesAll}
 	if mutate != nil {
 		mutate(srv)

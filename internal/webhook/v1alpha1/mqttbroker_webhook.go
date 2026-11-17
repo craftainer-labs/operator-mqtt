@@ -49,5 +49,5 @@ func (v *MqttBrokerValidator) ValidateDelete(_ context.Context, _ *mqttv1alpha1.
 }
 
 func (v *MqttBrokerValidator) validate(obj *mqttv1alpha1.MqttBroker) error {
-	return invalid("MqttBroker", obj.GetName(), validateBroker(&obj.Spec.BrokerConfig, obj.Spec.ProxyURL))
+	return invalid("MqttBroker", obj.GetName(), validateBroker(&obj.Spec.BrokerConfig, obj.Spec.ProxyURL, obj.Spec.Provider != nil))
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/craftainer-labs/lib-operator-go/pkg/cloud"
 	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
@@ -43,7 +44,7 @@ func TestProberProbesBothKinds(t *testing.T) {
 	namespaced := &mqttv1alpha1.MqttBroker{}
 	namespaced.Spec.Host = "mqtt.example.test"
 
-	for name, srv := range map[string]server.Server{"cluster": cluster, "namespaced": namespaced} {
+	for name, srv := range map[string]server.CloudServer{"cluster": cluster, "namespaced": namespaced} {
 		p, cfgs := probeFixture("2.0.22", nil)
 		got, err := p.Probe(context.Background(), srv, probeConn())
 		if err != nil || got != "2.0.22" {
@@ -160,5 +161,39 @@ func TestProberDefaultsToDynsecProbe(t *testing.T) {
 	}
 }
 
-// otherServer is a server.Server this operator does not own.
-type otherServer struct{ server.Server }
+// otherServer is a server.CloudServer this operator does not own.
+type otherServer struct{ server.CloudServer }
+
+// ProbeCloud returns the version of a self-hosted broker with nothing
+// discovered, refuses a broker with a provider before any connection, and
+// refuses a kind of another operator.
+func TestProberProbeCloud(t *testing.T) {
+	ctx := context.Background()
+	p, cfgs := probeFixture("2.0.22", nil)
+	srv := &mqttv1alpha1.MqttBroker{}
+	srv.Spec.Host = "mqtt.example.test"
+	got, err := p.ProbeCloud(ctx, srv, server.CloudConnection{Connection: probeConn()})
+	if err != nil || got.Version != "2.0.22" || len(got.Discovered) != 0 || len(*cfgs) != 1 {
+		t.Fatalf("self-hosted: %+v, %v", got, err)
+	}
+
+	cluster := &mqttv1alpha1.ClusterMqttBroker{}
+	cluster.Spec.Provider = &mqttv1alpha1.ClusterProvider{Type: cloud.ProviderAWS}
+	namespaced := &mqttv1alpha1.MqttBroker{}
+	namespaced.Spec.Provider = &mqttv1alpha1.Provider{Type: cloud.ProviderAWS}
+	for name, s := range map[string]server.CloudServer{"cluster": cluster, "namespaced": namespaced} {
+		if _, err := p.ProbeCloud(ctx, s, server.CloudConnection{}); !errors.Is(err, ErrCloudNotImplemented) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if len(*cfgs) != 1 {
+		t.Errorf("a cloud broker was connected: %d probes", len(*cfgs))
+	}
+
+	if _, err := p.ProbeCloud(ctx, otherServer{}, server.CloudConnection{}); !errors.Is(err, server.ErrUnknownServerKind) {
+		t.Errorf("kind: %v", err)
+	}
+	if hasProvider(otherServer{}) {
+		t.Error("another operator's kind has a provider")
+	}
+}

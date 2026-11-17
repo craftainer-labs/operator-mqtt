@@ -360,9 +360,9 @@ func setup(mgr ctrl.Manager, webhooks bool, cs controllerSettings) error {
 	steps = append(steps,
 		setupStep{"MqttUser controller", (&controller.UserReconciler{Config: cfg}).SetupWithManager},
 		setupStep{"ClusterMqttBroker probe", brokerProbe(mgr, cfg, cs.namespace,
-			func() probe.Server { return &mqttv1alpha1.ClusterMqttBroker{} })},
+			func() probe.CloudServer { return &mqttv1alpha1.ClusterMqttBroker{} })},
 		setupStep{"MqttBroker probe", brokerProbe(mgr, cfg, cs.namespace,
-			func() probe.Server { return &mqttv1alpha1.MqttBroker{} })})
+			func() probe.CloudServer { return &mqttv1alpha1.MqttBroker{} })})
 	// +kubebuilder:scaffold:builder
 	return runSteps(mgr, steps)
 }
@@ -383,9 +383,9 @@ func cacheByObject() map[client.Object]cache.ByObject {
 // own. Its Client reads Secrets and ConfigMaps live (managerOptions), and its
 // watches on them go through the manager's caches, which hold only the
 // managed-by labelled ones.
-func brokerProbe(mgr ctrl.Manager, cfg controller.Config, operatorNS string, kind func() probe.Server) func(ctrl.Manager) error {
+func brokerProbe(mgr ctrl.Manager, cfg controller.Config, operatorNS string, kind func() probe.CloudServer) func(ctrl.Manager) error {
 	return (&probe.Reconciler{
-		Client: mgr.GetClient(), New: kind, Prober: controller.Prober{Config: cfg},
+		Client: mgr.GetClient(), NewCloud: kind, CloudProber: controller.Prober{Config: cfg},
 		Options: probe.Options{OperatorNamespace: operatorNS},
 	}).SetupWithManager
 }

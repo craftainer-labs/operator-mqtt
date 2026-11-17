@@ -16,8 +16,8 @@ func mqttBroker(host, proxy string) *mqttv1alpha1.MqttBroker {
 	return &mqttv1alpha1.MqttBroker{
 		ObjectMeta: metav1.ObjectMeta{Name: "broker", Namespace: "default"},
 		Spec: mqttv1alpha1.MqttBrokerSpec{
-			ServerCommon: common.ServerCommon{ProxyURL: proxy},
-			BrokerConfig: mqttv1alpha1.BrokerConfig{Host: host},
+			CloudServerCommon: common.CloudServerCommon{ProxyURL: proxy},
+			BrokerConfig:      mqttv1alpha1.BrokerConfig{Host: host},
 		},
 	}
 }
@@ -26,8 +26,8 @@ func clusterMqttBroker(host, proxy string) *mqttv1alpha1.ClusterMqttBroker {
 	return &mqttv1alpha1.ClusterMqttBroker{
 		ObjectMeta: metav1.ObjectMeta{Name: "broker"},
 		Spec: mqttv1alpha1.ClusterMqttBrokerSpec{
-			ServerCommon: common.ServerCommon{ProxyURL: proxy},
-			BrokerConfig: mqttv1alpha1.BrokerConfig{Host: host},
+			CloudServerCommon: common.CloudServerCommon{ProxyURL: proxy},
+			BrokerConfig:      mqttv1alpha1.BrokerConfig{Host: host},
 		},
 	}
 }
@@ -203,4 +203,21 @@ func TestMqttUserMaxConnectionsWarning(t *testing.T) {
 	warnings, err = v.ValidateUpdate(context.Background(), mqttUser(), u)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(warnings).To(HaveLen(1))
+}
+
+// With a provider the host is an optional override: empty is valid, a set one
+// is still checked; without a provider an empty host is refused.
+func TestValidateBrokerHostWithAProvider(t *testing.T) {
+	if errs := validateBroker(&mqttv1alpha1.BrokerConfig{}, "", true); len(errs) != 0 {
+		t.Errorf("cloud broker with no host: %v", errs)
+	}
+	if errs := validateBroker(&mqttv1alpha1.BrokerConfig{Host: "10.0.0.7"}, "", true); len(errs) != 0 {
+		t.Errorf("cloud broker with a host override: %v", errs)
+	}
+	if errs := validateBroker(&mqttv1alpha1.BrokerConfig{Host: "-bad"}, "", true); len(errs) != 1 {
+		t.Errorf("cloud broker with a bad host override: %v", errs)
+	}
+	if errs := validateBroker(&mqttv1alpha1.BrokerConfig{}, "", false); len(errs) != 1 {
+		t.Errorf("self-hosted broker with no host: %v", errs)
+	}
 }
