@@ -195,13 +195,13 @@ func TestCredentialsSecret(t *testing.T) {
 	ref := &cloud.SecretRef{Name: "aws", Namespace: "ops"}
 
 	c := &ClusterMqttBroker{}
-	name, ns := c.GetCredentialsSecret()
+	name, _ := c.GetCredentialsSecret()
 	g.Expect(name).To(BeEmpty(), "no credentials")
 	c.Spec.Credentials = &cloud.Credentials{Source: cloud.SourceWorkloadIdentity}
 	name, _ = c.GetCredentialsSecret()
 	g.Expect(name).To(BeEmpty(), "workload identity")
 	c.Spec.Credentials = &cloud.Credentials{Source: cloud.SourceSecret, SecretRef: ref}
-	name, ns = c.GetCredentialsSecret()
+	name, ns := c.GetCredentialsSecret()
 	g.Expect(name).To(Equal("aws"))
 	g.Expect(ns).To(Equal("ops"))
 
