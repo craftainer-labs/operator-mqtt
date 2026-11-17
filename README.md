@@ -47,9 +47,55 @@ default, cluster brokers only: IRSA or EKS Pod Identity) or `source: Secret`
 (keys `accessKeyId`, `secretAccessKey`, optional `sessionToken`); a namespaced
 `MqttBroker` must use `Secret`, in its own namespace.
 
-This release carries the API only: a broker with a provider is reported
-`Ready=False` (`ServerUnreachable`) and its claims fail with a fixed message, until the AWS backend
-(IoT certificates and policies, in the binding Secret) lands.
+#### An `MqttUser` on AWS IoT Core
+
+A claim on a broker with a provider makes one **IoT policy** and one **device
+certificate**, with no Thing and no password. The policy is named like the
+client id (`<namespace>-<name>` cut to 128 bytes and ending in a short hash, kept
+in `status.externalName`), carries the ownership tag `craftainer.dev/claim`, and
+allows `iot:Connect` on that client id only, `iot:Publish` for the `Publish` and
+`PublishSubscribe` ACLs, and `iot:Subscribe` and `iot:Receive` for the
+`Subscribe` and `PublishSubscribe` ACLs, all under the tenant topic root. The
+binding Secret (type `servicebinding.io/mqtt`, `cloud: aws`) holds `host`,
+`port`, `protocol`, `endpoint` (`mqtts://host:port`), `clientId`,
+`certificate.pem`, `private-key.pem` and `topicRoot`. It has no `username`,
+`password` or `sslrootcert`: the certificate is the credential, and the data
+endpoint chains to the Amazon Trust Services roots that system trust stores
+carry. `host` is `spec.host` if set, else the endpoint the probe discovered; the
+port is `spec.port`, else a discovered `port`, else 8883. A claim waits (the
+broker is "not Ready") until the endpoint is known. This release's health probe
+does not discover it yet (it still reports `Ready=False`, `ServerUnreachable`),
+so a claim waits until a follow-up lands the probe.
+
+- The private key is returned by AWS once; it is written to the binding Secret
+  and nowhere else, never to a log, an Event, a condition or the status.
+  `status.externalId` is the active certificate's ARN, and `status.rotation.active`
+  its ID after a rotation.
+- A rotation (`craftainer.dev/rotate`, `rotationPolicy`) makes and attaches a
+  second certificate and rewrites the Secret; after the grace period every
+  other certificate attached to the policy is set `INACTIVE`, detached and
+  deleted. That also removes one a failed rotation attempt left attached.
+- Deleting the claim sets every certificate of the policy `INACTIVE`, detaches
+  and deletes it, then deletes the policy. A policy of the derived name that has
+  no tag, or another claim's, is a `NameCollision` and is never changed or
+  deleted; a claim that never issued a create is released without calling AWS.
+- A change of the ACLs makes a new default version of the policy (the old
+  versions are deleted first: IoT keeps five) and keeps the certificate. A
+  Secret that does not hold the active certificate is deleted, and the next
+  reconcile rotates.
+- A `+` or `#` level of an ACL topic becomes `*` in the policy's topic resources
+  (a filter such as `a/+/b` also allows `a/x/y/b`; the tenant root still bounds
+  it), `%c` becomes `${iot:ClientId}`, and a topic with `*`, `?` or `%u` is
+  refused. IoT limits a policy to 2048 characters without whitespace; a claim
+  with many ACLs can exceed it and is then refused, before any certificate is made. `maxConnections` is
+  ignored.
+- A certificate cannot carry a tag, so a certificate made but not yet attached
+  when the operator crashed (an `INACTIVE` one, which grants nothing) is ended
+  by the next attempt only if `status.externalId` names it; one made by a
+  `RotateBegin` that crashed before the status was written stays in the account
+  until someone deletes it.
+- The AWS client is built for each reconcile (a role to assume, or a web
+  identity, costs one STS call each time) and dials through the egress policy.
 
 ## Controllers
 

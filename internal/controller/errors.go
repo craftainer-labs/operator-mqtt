@@ -8,11 +8,13 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/craftainer-labs/lib-operator-go/pkg/cloud"
 	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
 var (
@@ -34,8 +36,12 @@ var (
 	// client does not speak (wss).
 	ErrUnsupportedProtocol = errors.New("the broker's protocol is not supported")
 	// ErrCloudNotImplemented means the broker has a provider whose backend this
-	// release does not run yet.
+	// release does not run yet; the health probe still says it.
 	ErrCloudNotImplemented = errors.New("the broker's cloud provider is not supported yet")
+	// ErrPolicyUnmanaged means an IoT policy of the name the claim derives exists
+	// and nothing shows that this claim made it. The operator never adopts,
+	// changes or deletes it.
+	ErrPolicyUnmanaged = errors.New("an IoT policy of that name exists and is not managed by this operator")
 	// ErrAdminCredentials means the admin Secret lacks the username or password.
 	ErrAdminCredentials = errors.New("the admin Secret needs the keys username and password")
 )
@@ -92,6 +98,7 @@ func isEgress(err error) bool {
 var rules = []rule{
 	{is(lifecycle.ErrNameCollision), "", false},
 	{is(ErrCloudNotImplemented), "", false},
+	{is(ErrPolicyUnmanaged), "", false},
 	{is(ErrBindingNotUsable), "", false},
 	{is(ErrBrokerNotReady), "", false},
 	{is(ErrInvalidACL), "", false},
@@ -105,6 +112,17 @@ var rules = []rule{
 	{is(server.ErrOperatorNamespaceUnset), "the broker's configuration or admin credentials are not usable", false},
 	{isEgress, "the connection to the broker was refused by the egress policy", true},
 	{isTLS, "the TLS handshake with the broker failed", true},
+	{is(cloud.ErrEndpointOverrideForbidden), "the broker's endpoint override is not allowed", false},
+	{is(cloud.ErrWorkloadIdentityForbidden), "the broker's cloud credentials are not usable", false},
+	{is(cloud.ErrInvalidEndpoint), "the broker's endpoint override is not valid", false},
+	{is(cloud.ErrCredentialsUnavailable), "the broker's cloud credentials are not usable", false},
+	{is(iotcore.ErrInvalidTopic), "an ACL topic cannot be used on AWS IoT Core", false},
+	{is(iotcore.ErrDenied), "the cloud refused the operator's credentials", false},
+	{is(iotcore.ErrUnavailable), "the cloud API did not answer", true},
+	{is(iotcore.ErrNotFound), "the cloud object was not found", false},
+	{is(iotcore.ErrAPI), "the cloud API reported an error", false},
+	{is(iotcore.ErrExists), "the cloud API reported an error", false},
+	{is(iotcore.ErrBadARN), "the cloud API reported an error", false},
 	{is(dynsec.ErrAuth), "the broker refused the operator's admin login", false},
 	{is(dynsec.ErrTimeout), "the broker did not answer in time", true},
 	{is(dynsec.ErrUnavailable), "the connection to the broker failed", true},

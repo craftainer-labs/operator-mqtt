@@ -26,6 +26,7 @@ import (
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
 // Keys of the admin Secret (docs/crd-drafts.md of lib-operator-go): the login of
@@ -93,7 +94,10 @@ type Config struct {
 	// is a credential kind and has none, so it only goes to the framework.
 	DefaultDeletionPolicy common.DeletionPolicy
 	Egress                egress.Policy
-	Connect               ConnectFunc
+	// IoT builds the AWS IoT client of a broker with a provider; production uses
+	// AWSIoT, and tests replace it.
+	IoT     IoTFunc
+	Connect ConnectFunc
 	// Cache keeps the connection of each broker between reconciles; nil
 	// connects for every use and nobody closes the connection, so the operator
 	// always sets one.
@@ -118,6 +122,11 @@ type backend struct {
 	// broker returns the logged-in connection to the broker, connecting on first
 	// use: a claim whose broker is not Ready never connects.
 	broker func(ctx context.Context) (Broker, error)
+	// iot returns the IoT client of a cloud broker, building it on first use (it
+	// reads the cloud credential), and is nil for a self-hosted broker.
+	iot func(ctx context.Context) (*iotcore.Client, error)
+	// client is the client iot built, kept for the rest of the reconcile.
+	client *iotcore.Client
 	// leases are the releases of the connections broker handed out; release
 	// calls them. The mutex guards the slice in case the lifecycle framework
 	// calls broker from more than one goroutine.
@@ -145,6 +154,9 @@ type brokerObject struct {
 	conditions []metav1.Condition
 	// cloud says spec.provider is set.
 	cloud bool
+	// srv is the broker object, and discovered its status.discovered.
+	srv        server.CloudServer
+	discovered map[string]string
 }
 
 // backend resolves ref for a claim in ns: the connection settings through
@@ -170,7 +182,7 @@ func (c Config) backend(ctx context.Context, ns string, ref common.ServerRef) (*
 		return nil, coarse(ctx, "read the broker", err)
 	}
 	if obj.cloud {
-		return nil, ErrCloudNotImplemented
+		return c.cloudBackend(obj, cc), nil
 	}
 	if obj.spec.Protocol == mqttv1alpha1.ProtocolWSS {
 		return nil, fmt.Errorf("%w: wss", ErrUnsupportedProtocol)
@@ -222,11 +234,11 @@ func (c Config) fetchBroker(ctx context.Context, ns string, ref common.ServerRef
 	if ref.Kind == mqttv1alpha1.KindClusterMqttBroker {
 		var s mqttv1alpha1.ClusterMqttBroker
 		err := c.Client.Get(ctx, client.ObjectKey{Name: ref.Name}, &s)
-		return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions, s.Spec.Provider != nil}, err
+		return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions, s.Spec.Provider != nil, &s, s.Status.Discovered}, err
 	}
 	var s mqttv1alpha1.MqttBroker
 	err := c.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, &s)
-	return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions, s.Spec.Provider != nil}, err
+	return brokerObject{s.UID, s.Generation, s.Spec.BrokerConfig, s.Status.Conditions, s.Spec.Provider != nil, &s, s.Status.Discovered}, err
 }
 
 // stamp identifies what a cached connection was made from: the broker object
