@@ -27,6 +27,7 @@ import (
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
 // createIssued is written to status.externalId before anything is created on
@@ -57,6 +58,15 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if be != nil {
 		defer be.release()
 	}
+	h := r.hooks(&u)
+	if err == nil && be.iot != nil {
+		opts.ServerHost = be.host
+		x := newIoTExternal(be, &u, h)
+		if u.DeletionTimestamp.IsZero() {
+			x.pre = be.notReady
+		}
+		return lifecycle.Reconcile[mqttv1alpha1.MqttUserSpec, iotcore.State](ctx, r.Client, &u, u.Spec, x, opts)
+	}
 	var ext lifecycle.External[mqttv1alpha1.MqttUserSpec, userState]
 	if err == nil {
 		opts.ServerHost = be.host
@@ -66,14 +76,31 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if u.DeletionTimestamp.IsZero() {
 			x.pre = be.notReady
 		}
-		x.persist = func(ctx context.Context) error { return r.Client.Status().Update(ctx, &u) }
-		x.binding = func(ctx context.Context) (*corev1.Secret, error) { return r.bindingSecret(ctx, &u) }
-		x.drop = func(ctx context.Context, s *corev1.Secret) error {
-			return client.IgnoreNotFound(r.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID}))
-		}
+		x.hooks = h
 		ext = x
 	}
 	return lifecycle.Reconcile(ctx, r.Client, &u, u.Spec, ext, opts)
+}
+
+// hooks are the claim's own calls an External makes outside its backend.
+type hooks struct {
+	// persist writes the claim's status now, instead of at the end of the
+	// reconcile.
+	persist func(context.Context) error
+	// binding reads the binding Secret as it is now; nil when there is none.
+	binding func(context.Context) (*corev1.Secret, error)
+	// drop deletes a binding Secret.
+	drop func(context.Context, *corev1.Secret) error
+}
+
+func (r *UserReconciler) hooks(u *mqttv1alpha1.MqttUser) hooks {
+	return hooks{
+		persist: func(ctx context.Context) error { return r.Client.Status().Update(ctx, u) },
+		binding: func(ctx context.Context) (*corev1.Secret, error) { return r.bindingSecret(ctx, u) },
+		drop: func(ctx context.Context, s *corev1.Secret) error {
+			return client.IgnoreNotFound(r.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID}))
+		},
+	}
 }
 
 // options are the lifecycle options of the controller; resolveErr is the error
@@ -223,13 +250,7 @@ type userExternal struct {
 	// pre is a precondition failure (the broker is not Ready). Observe reports
 	// it, and Reconcile calls nothing else when Observe fails.
 	pre error
-	// persist writes the claim's status now, instead of at the end of the
-	// reconcile.
-	persist func(context.Context) error
-	// binding reads the binding Secret as it is now; nil when there is none.
-	binding func(context.Context) (*corev1.Secret, error)
-	// drop deletes a binding Secret.
-	drop func(context.Context, *corev1.Secret) error
+	hooks
 }
 
 func newUserExternal(be *backend, claim *mqttv1alpha1.MqttUser) *userExternal {

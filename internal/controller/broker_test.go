@@ -26,6 +26,7 @@ import (
 
 	mqttv1alpha1 "github.com/craftainer-labs/operator-mqtt/api/v1alpha1"
 	"github.com/craftainer-labs/operator-mqtt/internal/dynsec"
+	"github.com/craftainer-labs/operator-mqtt/internal/iotcore"
 )
 
 func TestBrokerCache(t *testing.T) {
@@ -367,6 +368,18 @@ func TestCoarse(t *testing.T) {
 		{"invalid certificate", fmt.Errorf("%w: %w", dynsec.ErrUnavailable, x509.CertificateInvalidError{}), "the TLS handshake with the broker failed", true},
 		{"alert", fmt.Errorf("%w: %w", dynsec.ErrUnavailable, tls.AlertError(40)), "the TLS handshake with the broker failed", true},
 		{"record", fmt.Errorf("%w: %w", dynsec.ErrUnavailable, tls.RecordHeaderError{Msg: leak}), "the TLS handshake with the broker failed", true},
+		{"endpoint override", wrap(cloud.ErrEndpointOverrideForbidden), "the broker's endpoint override is not allowed", false},
+		{"workload identity", wrap(cloud.ErrWorkloadIdentityForbidden), "the broker's cloud credentials are not usable", false},
+		{"endpoint", wrap(cloud.ErrInvalidEndpoint), "the broker's endpoint override is not valid", false},
+		{"cloud credentials", wrap(cloud.ErrCredentialsUnavailable), "the broker's cloud credentials are not usable", false},
+		{"topic", wrap(iotcore.ErrInvalidTopic), "an ACL topic cannot be used on AWS IoT Core", false},
+		{"cloud denied", wrap(iotcore.ErrDenied), "the cloud refused the operator's credentials", false},
+		{"cloud down", wrap(iotcore.ErrUnavailable), "the cloud API did not answer", true},
+		{"cloud egress", fmt.Errorf("%w: %w", iotcore.ErrUnavailable, wrap(egress.ErrBlocked)), "the connection to the broker was refused by the egress policy", true},
+		{"cloud missing", wrap(iotcore.ErrNotFound), "the cloud object was not found", false},
+		{"cloud error", wrap(iotcore.ErrAPI), "the cloud API reported an error", false},
+		{"cloud exists", wrap(iotcore.ErrExists), "the cloud API reported an error", false},
+		{"cloud arn", wrap(iotcore.ErrBadARN), "the cloud API reported an error", false},
 		{"auth", wrap(dynsec.ErrAuth), "the broker refused the operator's admin login", false},
 		{"timeout", wrap(dynsec.ErrTimeout), "the broker did not answer in time", true},
 		{"unavailable", wrap(dynsec.ErrUnavailable), "the connection to the broker failed", true},
@@ -391,7 +404,7 @@ func TestCoarse(t *testing.T) {
 	// and so does an error that was made coarse.
 	for _, err := range []error{
 		fmt.Errorf("%w: %q", lifecycle.ErrNameCollision, "n"), ErrBindingNotUsable, ErrBrokerNotReady, fmt.Errorf("%w: x", ErrInvalidACL),
-		fmt.Errorf("%w: wss", ErrUnsupportedProtocol), ErrCloudNotImplemented,
+		fmt.Errorf("%w: wss", ErrUnsupportedProtocol), ErrCloudNotImplemented, fmt.Errorf("%w: n", ErrPolicyUnmanaged),
 	} {
 		if got := coarse(ctx, "op", err); got.Error() != err.Error() || !errors.Is(got, err) {
 			t.Errorf("%v changed to %v", err, got)
@@ -538,23 +551,5 @@ func TestNames(t *testing.T) {
 	if brokerKey("ns1", ref) == brokerKey("ns2", ref) || brokerKey("ns1", cluster) != brokerKey("ns2", cluster) ||
 		brokerKey("ns", ref) == brokerKey("ns", cluster) {
 		t.Error("broker keys")
-	}
-}
-
-// A broker with a provider has no backend in this release: the claim gets a
-// fixed text and the probe a category, and nothing is connected.
-func TestBackendRefusesACloudBrokerForNow(t *testing.T) {
-	ctx := context.Background()
-	h := newHarness(t, nil)
-	srv := &mqttv1alpha1.ClusterMqttBroker{ObjectMeta: metav1.ObjectMeta{Name: h.server.Name + "-aws"}}
-	srv.Spec.Provider = &mqttv1alpha1.ClusterProvider{
-		Type: cloud.ProviderAWS, AWS: &cloud.AWSClusterBlock{AWSBlock: cloud.AWSBlock{Region: "eu-west-1"}},
-	}
-	srv.Spec.AllowedNamespaces = common.AllowedNamespaces{From: common.NamespacesAll}
-	h.must(env.Client.Create(ctx, srv))
-	t.Cleanup(func() { _ = env.Client.Delete(ctx, srv) })
-	ref := common.ServerRef{Kind: mqttv1alpha1.KindClusterMqttBroker, Name: srv.Name}
-	if _, err := h.cfg.backend(ctx, h.ns, ref); !errors.Is(err, ErrCloudNotImplemented) {
-		t.Errorf("cloud broker: %v", err)
 	}
 }
