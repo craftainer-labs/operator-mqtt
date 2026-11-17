@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxPolicyLen is the longest policy document IoT accepts, in characters
@@ -83,8 +84,8 @@ func Document(s Scope, clientID string, rules []Rule) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(b) > maxPolicyLen {
-		return "", fmt.Errorf("%w: the policy has %d characters, IoT allows %d", ErrInvalidTopic, len(b), maxPolicyLen)
+	if n := utf8.RuneCount(b); n > maxPolicyLen {
+		return "", fmt.Errorf("%w: the policy has %d characters, IoT allows %d", ErrInvalidTopic, n, maxPolicyLen)
 	}
 	return string(b), nil
 }

@@ -245,15 +245,15 @@ func TestIoTCreateRefusesAForeignPolicy(t *testing.T) {
 		}
 	}
 
-	// A certificate that cannot be ended stays named by status.externalId, so the
-	// next attempt ends it.
+	// A certificate that cannot be ended stays named by status.externalId, so
+	// deleting the claim ends it; the cloud's error is not in the refusal.
 	f := newFakeIoT()
 	if err := iotcore.New(f).CreatePolicy(ctx, iotPolicy, "other/claim/uid", `{}`); err != nil {
 		t.Fatal(err)
 	}
 	e := iotExt(t, f)
 	f.fail["UpdateCertificate"] = errBroker
-	if _, err := e.Create(ctx, iotSpec); !errors.Is(err, lifecycle.ErrNameCollision) || !errors.Is(err, errBroker) || e.claim.GetExternalID() != iotARN+"cert/cert0001" {
+	if _, err := e.Create(ctx, iotSpec); !errors.Is(err, lifecycle.ErrNameCollision) || errors.Is(err, errBroker) || e.claim.GetExternalID() != iotARN+"cert/cert0001" {
 		t.Errorf("retire fails: %v, externalId %q", err, e.claim.GetExternalID())
 	}
 }
