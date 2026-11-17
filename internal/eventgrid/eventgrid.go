@@ -99,12 +99,12 @@ func classify(err error) error {
 	}
 	var resp *azcore.ResponseError
 	if errors.As(err, &resp) {
-		switch {
-		case resp.StatusCode == 404:
+		switch resp.StatusCode {
+		case 404:
 			return fmt.Errorf("%w: %w", ErrNotFound, err)
-		case resp.StatusCode == 401 || resp.StatusCode == 403:
+		case 401, 403:
 			return fmt.Errorf("%w: %w", ErrDenied, err)
-		case resp.StatusCode == 409:
+		case 409:
 			// Another operation on the object is still running.
 			return fmt.Errorf("%w: %w", ErrPending, err)
 		}
@@ -282,7 +282,8 @@ func (c *Client) Observe(ctx context.Context, n Names, claim string) (State, err
 		if p != nil {
 			v, _ := p.Attributes[ClaimAttr].(string)
 			mine = v == Marker(claim)
-			if a := p.ClientCertificateAuthentication; a != nil && a.ValidationScheme != nil &&
+			// A client in a failed state allows nothing, whatever it lists.
+			if a := p.ClientCertificateAuthentication; a != nil && a.ValidationScheme != nil && !failed(string(deref(p.ProvisioningState))) &&
 				*a.ValidationScheme == armeventgrid.ClientCertificateValidationSchemeThumbprintMatch {
 				for _, t := range a.AllowedThumbprints {
 					st.Thumbprints = append(st.Thumbprints, NormalizeThumbprint(str(t)))

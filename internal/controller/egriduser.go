@@ -62,6 +62,8 @@ type egExternal struct {
 	id    string
 	root  string
 	now   func() time.Time
+	// newCert makes a client certificate (eventgrid.NewCert; a test replaces it).
+	newCert func(authName string, now time.Time) (eventgrid.Cert, error)
 	// pre is a precondition failure (the broker is not Ready).
 	pre error
 	hooks
@@ -78,7 +80,7 @@ func newEventGridExternal(be *backend, claim *mqttv1alpha1.MqttUser, h hooks, no
 	}
 	return &egExternal{
 		be: be, claim: claim, name: name, names: eventgrid.NamesOf(name), id: claimID(claim),
-		root: be.spec.Root(claim.Namespace), now: now, hooks: h,
+		root: be.spec.Root(claim.Namespace), now: now, newCert: eventgrid.NewCert, hooks: h,
 	}
 }
 
@@ -109,7 +111,25 @@ func (e *egExternal) thumbprintsOK(st eventgrid.State) bool {
 	if active == "" || !slices.Contains(st.Thumbprints, active) {
 		return false
 	}
+	if prev := e.claim.GetRotationStatus().Previous; e.inGrace() && isThumbprint(prev) {
+		// The list is the active and the previous certificate, nothing else.
+		for _, t := range st.Thumbprints {
+			if t != active && t != prev {
+				return false
+			}
+		}
+		return slices.Contains(st.Thumbprints, prev)
+	}
 	return e.inGrace() && len(st.Thumbprints) <= 2 || len(st.Thumbprints) == 1
+}
+
+// wantedThumbprints is the list the client should carry: the active
+// certificate, and the previous one during a grace period.
+func (e *egExternal) wantedThumbprints(active string) []string {
+	if prev := e.claim.GetRotationStatus().Previous; e.inGrace() && isThumbprint(prev) && prev != active {
+		return []string{active, prev}
+	}
+	return []string{active}
 }
 
 // spec turns the ACLs into the topics of the publish space and of the subscribe
@@ -221,7 +241,7 @@ func (e *egExternal) create(ctx context.Context, spec mqttv1alpha1.MqttUserSpec)
 // recorded before the client names it, so a crash leaves a certificate the
 // claim knows.
 func (e *egExternal) fresh(ctx context.Context, c *eventgrid.Client, want eventgrid.Spec, cur eventgrid.State) (binding.Data, error) {
-	cert, err := eventgrid.NewCert(e.name, e.now())
+	cert, err := e.newCert(e.name, e.now())
 	if err != nil {
 		return nil, err
 	}
@@ -277,8 +297,9 @@ func (e *egExternal) update(ctx context.Context, spec mqttv1alpha1.MqttUserSpec,
 		return nil, e.unusable(ctx, s)
 	}
 	if !e.thumbprintsOK(cur) {
-		// A thumbprint that is neither active nor in a grace period goes.
-		if err := c.PutClient(ctx, e.names, e.id, []string{active}); err != nil {
+		// A thumbprint that is neither active nor the previous one in a grace
+		// period goes, and a previous one that went missing comes back.
+		if err := c.PutClient(ctx, e.names, e.id, e.wantedThumbprints(active)); err != nil {
 			return nil, err
 		}
 	}
@@ -335,7 +356,7 @@ func (e *egExternal) begin(ctx context.Context, cur eventgrid.State) (binding.Da
 	if err != nil {
 		return nil, "", err
 	}
-	cert, err := eventgrid.NewCert(e.name, e.now())
+	cert, err := e.newCert(e.name, e.now())
 	if err != nil {
 		return nil, "", err
 	}

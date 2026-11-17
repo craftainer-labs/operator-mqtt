@@ -20,6 +20,14 @@ import (
 // a certificate nobody rotates.
 const certLifetime = 10 * 365 * 24 * time.Hour
 
+// The steps of NewCert that can fail, as variables so a test can make each fail.
+var (
+	generateKey = func() (*ecdsa.PrivateKey, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) }
+	newSerial   = func() (*big.Int, error) { return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127)) }
+	signCert    = x509.CreateCertificate
+	encodeKey   = x509.MarshalPKCS8PrivateKey
+)
+
 // Cert is a client certificate and its private key. Event Grid never sees the
 // key: the operator makes the pair, and the key lives only in the binding
 // Secret. Printing a Cert never shows the key.
@@ -43,11 +51,11 @@ func (c Cert) GoString() string { return c.String() }
 // NewCert makes a self-signed ECDSA P-256 client certificate whose common name
 // is the client's authentication name.
 func NewCert(authName string, now time.Time) (Cert, error) {
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	k, err := generateKey()
 	if err != nil {
 		return Cert{}, fmt.Errorf("%w: generate a key: %w", ErrAPI, err)
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	serial, err := newSerial()
 	if err != nil {
 		return Cert{}, fmt.Errorf("%w: generate a serial number: %w", ErrAPI, err)
 	}
@@ -57,11 +65,11 @@ func NewCert(authName string, now time.Time) (Cert, error) {
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &k.PublicKey, k)
+	der, err := signCert(rand.Reader, tpl, tpl, &k.PublicKey, k)
 	if err != nil {
 		return Cert{}, fmt.Errorf("%w: sign the certificate: %w", ErrAPI, err)
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(k)
+	keyDER, err := encodeKey(k)
 	if err != nil {
 		return Cert{}, fmt.Errorf("%w: encode the key: %w", ErrAPI, err)
 	}

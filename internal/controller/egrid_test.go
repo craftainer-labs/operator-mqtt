@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/craftainer-labs/lib-operator-go/pkg/apis/common"
 	"github.com/craftainer-labs/lib-operator-go/pkg/cloud"
 	"github.com/craftainer-labs/lib-operator-go/pkg/conditions"
+	"github.com/craftainer-labs/lib-operator-go/pkg/egress"
 	"github.com/craftainer-labs/lib-operator-go/pkg/lifecycle"
 	"github.com/craftainer-labs/lib-operator-go/pkg/server"
 
@@ -161,9 +163,26 @@ func TestEventGridCreateFailures(t *testing.T) {
 	if _, err := e.Create(ctx, egSpec); !errors.Is(err, errBroker) {
 		t.Errorf("client: %v", err)
 	}
-	e.persist = func(context.Context) error { return errBroker }
+	// The intent is recorded first, and the thumbprint second: either failing
+	// stops the create before the cloud is asked.
+	for fail := 1; fail <= 2; fail++ {
+		srv := egfake.New(t, "127.0.0.1")
+		e := egExt(t, srv)
+		n := 0
+		e.persist = func(context.Context) error {
+			if n++; n == fail {
+				return errBroker
+			}
+			return nil
+		}
+		if _, err := e.Create(ctx, egSpec); !errors.Is(err, errBroker) || len(srv.Calls()) != 0 {
+			t.Errorf("persist %d: %v, calls %v", fail, err, srv.Calls())
+		}
+	}
+	e = egExt(t, egfake.New(t, "127.0.0.1"))
+	e.newCert = func(string, time.Time) (eventgrid.Cert, error) { return eventgrid.Cert{}, errBroker }
 	if _, err := e.Create(ctx, egSpec); !errors.Is(err, errBroker) {
-		t.Errorf("persist: %v", err)
+		t.Errorf("certificate: %v", err)
 	}
 }
 
@@ -537,5 +556,276 @@ func TestProbeEventGrid(t *testing.T) {
 	p.Config.EventGrid = nil
 	if _, err := p.ProbeCloud(ctx, azureCluster(), server.CloudConnection{}); !errors.Is(err, server.ErrInvalidServer) {
 		t.Errorf("no client: %v", err)
+	}
+}
+
+func TestEventGridActiveThumbprintOfANewClaim(t *testing.T) {
+	if got := egExt(t, egfake.New(t, "127.0.0.1")).activeThumbprint(); got != "" {
+		t.Errorf("active thumbprint = %q", got)
+	}
+}
+
+func TestEventGridUpdateFailures(t *testing.T) {
+	ctx := context.Background()
+	e, srv, cur, pem := egCreated(t)
+	e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, pem, "KEY", true), nil }
+	good := e.be.eg
+	e.be.eg = func(context.Context) (*eventgrid.Client, error) { return nil, errBroker }
+	if _, err := e.Update(ctx, egSpec, cur); !errors.Is(err, errBroker) {
+		t.Errorf("client: %v", err)
+	}
+	e.be.eg = good
+
+	// A thumbprint that must go, with the write failing, and then a Secret that
+	// cannot be dropped.
+	extra, _ := eventgrid.NewCert(egBase, time.Now())
+	client, _ := srv.NewClient()
+	if err := client.PutClient(ctx, eventgrid.NamesOf(egBase), "tenant/app/uid-1", []string{e.activeThumbprint(), extra.Thumbprint}); err != nil {
+		t.Fatal(err)
+	}
+	obs, _ := e.Observe(ctx, egSpec)
+	srv.Fail("PUT clients", 500)
+	if _, err := e.Update(ctx, egSpec, obs.Current); !errors.Is(err, eventgrid.ErrAPI) {
+		t.Errorf("trim: %v", err)
+	}
+	srv.Fail("PUT clients", 0)
+	e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, "not it", "KEY", true), nil }
+	e.drop = func(context.Context, *corev1.Secret) error { return errBroker }
+	if _, err := e.Update(ctx, egSpec, obs.Current); !errors.Is(err, errBroker) {
+		t.Errorf("drop: %v", err)
+	}
+}
+
+// During a grace period the client allows the active certificate and the
+// previous one, nothing else; a previous one that went missing comes back.
+func TestEventGridGracePeriodAllowsOnlyThePrevious(t *testing.T) {
+	ctx := context.Background()
+	e, srv, _, pem := egCreated(t)
+	names := eventgrid.NamesOf(egBase)
+	active := e.activeThumbprint()
+	prev, _ := eventgrid.NewCert(egBase, time.Now())
+	extra, _ := eventgrid.NewCert(egBase, time.Now())
+	client, _ := srv.NewClient()
+	put := func(list ...string) {
+		t.Helper()
+		if err := client.PutClient(ctx, names, "tenant/app/uid-1", list); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.claim.Status.Rotation = &common.RotationStatus{Active: active, Previous: prev.Thumbprint}
+	for name, tc := range map[string]struct {
+		list []string
+		ok   bool
+	}{
+		"active and previous": {[]string{active, prev.Thumbprint}, true},
+		"a stranger":          {[]string{active, extra.Thumbprint}, false},
+		"previous is gone":    {[]string{active}, false},
+	} {
+		put(tc.list...)
+		if obs, err := e.Observe(ctx, egSpec); err != nil || obs.UpToDate != tc.ok {
+			t.Errorf("%s: %+v, %v", name, obs, err)
+		}
+	}
+
+	// The stranger goes and the previous certificate is back.
+	put(active, extra.Thumbprint)
+	obs, _ := e.Observe(ctx, egSpec)
+	e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, pem, "KEY", true), nil }
+	if _, err := e.Update(ctx, egSpec, obs.Current); err != nil {
+		t.Fatal(err)
+	}
+	obs, _ = e.Observe(ctx, egSpec)
+	if !obs.UpToDate || len(obs.Current.Thumbprints) != 2 || !slices.Contains(obs.Current.Thumbprints, prev.Thumbprint) ||
+		slices.Contains(obs.Current.Thumbprints, extra.Thumbprint) {
+		t.Errorf("thumbprints = %v", obs.Current.Thumbprints)
+	}
+}
+
+func TestEventGridRotateBeginNeedsACertificate(t *testing.T) {
+	e, _, cur, _ := egCreated(t)
+	before := e.claim.GetExternalID()
+	e.newCert = func(string, time.Time) (eventgrid.Cert, error) { return eventgrid.Cert{}, errBroker }
+	if _, _, err := e.RotateBegin(context.Background(), egSpec, cur, lifecycle.RotationState{}); !errors.Is(err, errBroker) || e.claim.GetExternalID() != before {
+		t.Errorf("begin: %v", err)
+	}
+}
+
+func TestAzureEventGrid(t *testing.T) {
+	ctx := context.Background()
+	keys := map[string][]byte{cloud.KeyAzureClientID: []byte("11111111-1111-4111-8111-111111111111"), cloud.KeyAzureClientSecret: []byte("secret")}
+	cluster := azureCluster()
+	cluster.Spec.Credentials = &cloud.Credentials{Source: cloud.SourceSecret, SecretRef: &cloud.SecretRef{Name: "azure", Namespace: "ops"}}
+	namespaced := &mqttv1alpha1.MqttBroker{}
+	namespaced.Spec.Provider = &mqttv1alpha1.Provider{Type: cloud.ProviderAzure, Azure: &mqttv1alpha1.AzureProvider{
+		AzureBlock: cloud.AzureBlock{TenantID: egfake.Tenant, SubscriptionID: egfake.Subscription, ResourceGroup: egfake.ResourceGroup}, EventGridNamespace: "ns",
+	}}
+	namespaced.Spec.Credentials = &cloud.NamespacedCredentials{Source: cloud.SourceSecret, SecretRef: &cloud.SecretRef{Name: "azure"}}
+
+	mk := AzureEventGrid(egress.ModeStrict, nil)
+	for name, srv := range map[string]server.CloudServer{"cluster": cluster, "namespaced": namespaced} {
+		c, err := mk(ctx, srv, server.CloudConnection{Credentials: keys})
+		if err != nil || c == nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	// What the library refuses stays refused.
+	namespaced.Spec.Credentials = nil
+	if _, err := mk(ctx, namespaced, server.CloudConnection{}); !errors.Is(err, cloud.ErrWorkloadIdentityForbidden) {
+		t.Errorf("namespaced with workload identity: %v", err)
+	}
+	cluster.Spec.Provider.Azure.EndpointOverride = "https://10.0.0.1:5000"
+	if _, err := mk(ctx, cluster, server.CloudConnection{Credentials: keys}); !errors.Is(err, cloud.ErrEndpointOverrideForbidden) {
+		t.Errorf("override in strict mode: %v", err)
+	}
+	if c, err := AzureEventGrid(egress.ModeAllowPrivate, x509.NewCertPool())(ctx, cluster, server.CloudConnection{Credentials: keys}); err != nil || c == nil {
+		t.Errorf("override in allow-private mode: %v", err)
+	}
+	cluster.Spec.Provider.Azure.EndpointOverride = ""
+	if _, err := mk(ctx, cluster, server.CloudConnection{Credentials: map[string][]byte{}}); !errors.Is(err, cloud.ErrCredentialsUnavailable) {
+		t.Errorf("no keys: %v", err)
+	}
+	if _, err := mk(ctx, &mqttv1alpha1.ClusterMqttBroker{}, server.CloudConnection{}); !errors.Is(err, server.ErrInvalidServer) {
+		t.Errorf("no provider: %v", err)
+	}
+	if _, err := mk(ctx, otherServer{}, server.CloudConnection{}); !errors.Is(err, server.ErrUnknownServerKind) {
+		t.Errorf("kind: %v", err)
+	}
+}
+
+func TestCloudBackendOfAnAzureBroker(t *testing.T) {
+	ctx := context.Background()
+	client, _ := egfake.New(t, "127.0.0.1").NewClient()
+	builds := 0
+	var failWith error
+	cfg := Config{EventGrid: func(context.Context, server.CloudServer, server.CloudConnection) (*eventgrid.Client, error) {
+		builds++
+		return client, failWith
+	}}
+	obj := brokerObject{
+		srv: azureCluster(), discovered: map[string]string{"endpoint": egHost},
+		conditions: []metav1.Condition{{Type: conditions.Ready, Status: metav1.ConditionTrue}},
+	}
+	b := cfg.cloudBackend(obj, server.CloudConnection{})
+	if b.iot != nil || b.eg == nil || b.notReady != nil || b.host != egHost || b.spec.PortOrDefault() != 8883 {
+		t.Fatalf("backend = %+v", b)
+	}
+	c1, err := b.eg(ctx)
+	c2, _ := b.eg(ctx)
+	if err != nil || c1 != c2 || builds != 1 {
+		t.Errorf("client built %d times: %v", builds, err)
+	}
+
+	// A credential that cannot be read is a fixed text, and builds nothing.
+	failWith = cloud.ErrCredentialsUnavailable
+	b = cfg.cloudBackend(obj, server.CloudConnection{})
+	if _, err := b.eg(ctx); !errors.Is(err, cloud.ErrCredentialsUnavailable) || err.Error() != "the broker's cloud credentials are not usable" || b.egClient != nil {
+		t.Errorf("credentials: %v", err)
+	}
+	if _, err := (Config{}).cloudBackend(obj, server.CloudConnection{}).eg(ctx); !errors.Is(err, server.ErrInvalidServer) {
+		t.Errorf("no client: %v", err)
+	}
+}
+
+// The claim of an Azure Event Grid broker, from its creation to its deletion:
+// the private key is in the binding Secret only, and a rotation allows two
+// certificates and then one.
+func TestEventGridUserLifecycleAndRotation(t *testing.T) {
+	ctx := context.Background()
+	fake := egfake.New(t, "127.0.0.1")
+	client, err := fake.NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, func(s *mqttv1alpha1.ClusterMqttBroker) {
+		s.Spec.Host = ""
+		s.Spec.AdminCredentialsSecretRef = nil
+		s.Spec.Provider = azureCluster().Spec.Provider
+	})
+	h.cfg.EventGrid = func(context.Context, server.CloudServer, server.CloudConnection) (*eventgrid.Client, error) {
+		return client, nil
+	}
+	r := &UserReconciler{h.cfg}
+	grace := metav1.Duration{Duration: time.Hour}
+	u := h.user("device", func(u *mqttv1alpha1.MqttUser) {
+		u.Spec.RotationPolicy = &common.RotationPolicy{GracePeriod: &grace}
+	})
+	name := egName(h.ns, "device")
+	thumbprints := func() []string {
+		auth, _ := fake.Properties("clients", name)["clientCertificateAuthentication"].(map[string]any)
+		var out []string
+		list, _ := auth["allowedThumbprints"].([]any)
+		for _, v := range list {
+			th, _ := v.(string)
+			out = append(out, th)
+		}
+		return out
+	}
+
+	// The probe has not found the endpoint yet: the claim waits and the cloud is
+	// not asked.
+	if err := h.reconcile(r, u); !errors.Is(err, ErrBrokerNotReady) || len(fake.Calls()) != 0 {
+		t.Fatalf("before the probe: %v, %v", err, fake.Calls())
+	}
+	h.get(h.server)
+	h.server.Status.Discovered = map[string]string{mqttv1alpha1.DiscoveredEndpoint: egHost}
+	h.must(env.Client.Status().Update(ctx, h.server))
+
+	h.reconcileOK(r, u)
+	h.get(u)
+	if u.Status.ExternalName != name || !isThumbprint(u.Status.ExternalID) || u.Status.Binding == nil {
+		t.Fatalf("status = %+v", u.Status)
+	}
+	first := u.Status.ExternalID
+	h.wantCondition(u.Status.Conditions, conditions.Ready, metav1.ConditionTrue, conditions.Available)
+	data := h.bindingSecret(u)
+	if data["host"] != egHost || data["clientId"] != name || data["cloud"] != "azure" || data["port"] != "8883" ||
+		eventgrid.PEMThumbprint(data[keyCertificate]) != first || !strings.Contains(data[keyPrivateKey], "PRIVATE KEY") {
+		t.Errorf("binding = %v", data)
+	}
+	if !slices.Equal(thumbprints(), []string{first}) {
+		t.Errorf("thumbprints = %v", thumbprints())
+	}
+	// The private key is in the Secret only: not in an Event or a condition.
+	h.rec.AssertNoSecret(t, data[keyPrivateKey])
+
+	// Steady state: nothing is written.
+	fake.Reset()
+	h.reconcileOK(r, u)
+	for _, c := range fake.Calls() {
+		if strings.HasPrefix(c, "PUT") || strings.HasPrefix(c, "DELETE") {
+			t.Errorf("a write in the steady state: %s", c)
+		}
+	}
+
+	// A rotation allows both certificates for the grace period.
+	h.patch(u, func() { u.Annotations = map[string]string{lifecycle.AnnotationRotate: "1"} })
+	h.reconcileOK(r, u)
+	h.get(u)
+	second := u.Status.ExternalID
+	if second == first || u.Status.Rotation == nil || u.Status.Rotation.Active != second || len(thumbprints()) != 2 {
+		t.Fatalf("rotation = %+v, externalId = %q, thumbprints = %v", u.Status.Rotation, second, thumbprints())
+	}
+	if got := h.bindingSecret(u); eventgrid.PEMThumbprint(got[keyCertificate]) != second {
+		t.Errorf("the binding does not hold the new certificate: %v", got)
+	}
+	// Still two on the next reconcile: the grace period is respected.
+	h.reconcileOK(r, u)
+	if len(thumbprints()) != 2 {
+		t.Errorf("thumbprints in the grace period = %v", thumbprints())
+	}
+
+	// After the grace period only the new one remains.
+	h.now = h.now.Add(2 * time.Hour)
+	h.reconcileOK(r, u)
+	if !slices.Equal(thumbprints(), []string{second}) {
+		t.Errorf("thumbprints after the grace period = %v", thumbprints())
+	}
+
+	// Deleting removes the objects, and the claim goes.
+	h.must(env.Client.Delete(ctx, u))
+	h.reconcileOK(r, u)
+	if !h.gone(u) || len(fake.Names("clients"))+len(fake.Names("clientGroups"))+len(fake.Names("topicSpaces"))+len(fake.Names("permissionBindings")) != 0 {
+		t.Errorf("gone = %t, clients = %v", h.gone(u), fake.Names("clients"))
 	}
 }

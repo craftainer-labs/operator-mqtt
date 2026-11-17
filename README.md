@@ -112,8 +112,11 @@ of an Event Grid namespace with MQTT enabled. `credentials.source` is
 `WorkloadIdentity` (cluster brokers only; the ServiceAccount carries
 `azure.workload.identity/client-id` and the pod the label
 `azure.workload.identity/use: "true"`) or `Secret` with the keys `clientId` and
-`clientSecret`. The identity needs rights on the namespace's clients, client
-groups, topic spaces and permission bindings. The probe reads the namespace
+`clientSecret`. The identity needs only these actions on the namespace, in a
+custom role scoped to it: `Microsoft.EventGrid/namespaces/read` and
+`.../clients`, `.../clientGroups`, `.../topicSpaces` and `.../permissionBindings`
+each with `read`, `write` and `delete`. A broad built-in role such as Contributor
+grants far more than that. The probe reads the namespace
 through Azure Resource Manager and records `endpoint` (its MQTT host name),
 `region` (its location), `resourceId` and `port` (8883) in `status.discovered`.
 

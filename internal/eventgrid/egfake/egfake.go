@@ -13,9 +13,15 @@ package egfake
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -62,23 +68,53 @@ type Server struct {
 	slow int
 	// NoMQTT makes the namespace report topic spaces as disabled.
 	noMQTT bool
+	// noHost makes an enabled namespace report no host name.
+	noHost bool
 }
 
 // New starts the fake on ip (127.0.0.1 for a unit test; a private address where
 // the egress policy refuses loopback) and stops it with the test.
 func New(t testing.TB, ip string) *Server {
 	t.Helper()
-	l, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := must(t, func() (net.Listener, error) { return net.Listen("tcp", net.JoinHostPort(ip, "0")) })
 	s := &Server{objects: map[string]*object{}, fail: map[string]int{}}
 	s.Server = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
-	s.Listener.Close()
+	_ = s.Listener.Close() // the loopback listener NewUnstartedServer made
 	s.Listener = l
+	// httptest's built-in certificate names only 127.0.0.1, so the fake needs
+	// its own, valid for the address it listens on.
+	s.TLS = &tls.Config{Certificates: []tls.Certificate{selfSigned(t, net.ParseIP(ip))}, MinVersion: tls.VersionTLS12}
 	s.StartTLS()
 	t.Cleanup(s.Close)
 	return s
+}
+
+// must returns what f returns and stops the test on its error.
+func must[T any](t testing.TB, f func() (T, error)) T {
+	t.Helper()
+	v, err := f()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// selfSigned makes a throwaway certificate for ip, held only in memory.
+func selfSigned(t testing.TB, ip net.IP) tls.Certificate {
+	t.Helper()
+	key := must(t, func() (*ecdsa.PrivateKey, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) })
+	tpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "egfake"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{ip},
+	}
+	der := must(t, func() ([]byte, error) { return x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key) })
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 // Roots is a pool that trusts the fake's certificate.
@@ -123,6 +159,22 @@ func (s *Server) DisableMQTT() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.noMQTT = true
+}
+
+// NoHostname makes the namespace report MQTT as enabled with no host name.
+func (s *Server) NoHostname() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noHost = true
+}
+
+// SetState makes an object report the provisioning state (Failed, for example).
+func (s *Server) SetState(kind, name, state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if o := s.objects[kind+"/"+name]; o != nil {
+		o.body["properties"].(map[string]any)["provisioningState"] = state
+	}
 }
 
 // Seed stores an object as if somebody else made it: properties is its
@@ -232,9 +284,10 @@ func (s *Server) write(w http.ResponseWriter, status int, key string, body map[s
 	for k, v := range props {
 		out[k] = v
 	}
-	if state != "" {
+	switch {
+	case state != "":
 		out["provisioningState"] = state
-	} else {
+	case out["provisioningState"] == nil:
 		out["provisioningState"] = "Succeeded"
 	}
 	_, name, _ := strings.Cut(key, "/")
@@ -256,12 +309,16 @@ func (s *Server) namespace(w http.ResponseWriter, r *http.Request) {
 	if s.noMQTT {
 		state = "Disabled"
 	}
+	host := Hostname
+	if s.noHost {
+		host = ""
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"name": Namespace, "location": Location,
 		"id": "/subscriptions/" + Subscription + "/resourceGroups/" + ResourceGroup + "/providers/Microsoft.EventGrid/namespaces/" + Namespace,
 		"properties": map[string]any{
 			"provisioningState":        "Succeeded",
-			"topicSpacesConfiguration": map[string]any{"state": state, "hostname": Hostname},
+			"topicSpacesConfiguration": map[string]any{"state": state, "hostname": host},
 		},
 	})
 }
@@ -271,8 +328,9 @@ func (s *Server) entra(w http.ResponseWriter, r *http.Request) {
 	base := "https://" + r.Host + "/" + Tenant
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration"):
-		_, _ = io.WriteString(w, `{"issuer":"`+base+`/v2.0","authorization_endpoint":"`+base+`/oauth2/v2.0/authorize",`+
-			`"token_endpoint":"`+base+`/oauth2/v2.0/token"}`)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"issuer": base + "/v2.0", "authorization_endpoint": base + "/oauth2/v2.0/authorize", "token_endpoint": base + "/oauth2/v2.0/token",
+		})
 	case strings.HasSuffix(r.URL.Path, "/token"):
 		s.mu.Lock()
 		s.calls = append(s.calls, "POST token")

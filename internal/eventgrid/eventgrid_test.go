@@ -323,3 +323,68 @@ func TestStateInSyncNeedsEverything(t *testing.T) {
 		}
 	}
 }
+
+func TestNamespaceWithoutAHostName(t *testing.T) {
+	srv, c := setup(t)
+	srv.NoHostname()
+	if _, err := c.Namespace(ctx); !errors.Is(err, eventgrid.ErrAPI) {
+		t.Errorf("no host name: %v", err)
+	}
+}
+
+var userObjects = []struct{ kind, name string }{
+	{"clients", names.Client}, {"clientGroups", names.Group}, {"topicSpaces", names.PubSpace},
+	{"topicSpaces", names.SubSpace}, {"permissionBindings", names.PubBinding}, {"permissionBindings", names.SubBinding},
+}
+
+// An object in a failed state is not usable, whatever it still lists.
+func TestObserveFailedObjects(t *testing.T) {
+	for _, o := range userObjects {
+		srv, c, _ := made(t)
+		srv.SetState(o.kind, o.name, "Failed")
+		st, err := c.Observe(ctx, names, claim)
+		if err != nil || st.InSync(claim, spec) && o.kind != "clients" {
+			t.Errorf("%s: state = %+v, %v", o.kind+"/"+o.name, st, err)
+		}
+		if o.kind == "clients" && len(st.Thumbprints) != 0 {
+			t.Errorf("a failed client lists %v", st.Thumbprints)
+		}
+	}
+}
+
+// An object that is still changing makes Observe wait.
+func TestObservePendingObjects(t *testing.T) {
+	for _, o := range userObjects {
+		srv, c, _ := made(t)
+		srv.SetState(o.kind, o.name, "Updating")
+		if _, err := c.Observe(ctx, names, claim); !errors.Is(err, eventgrid.ErrPending) {
+			t.Errorf("%s: %v", o.kind+"/"+o.name, err)
+		}
+	}
+}
+
+func TestObserveAndApplyFailures(t *testing.T) {
+	for _, kind := range []string{"clientGroups", "topicSpaces", "permissionBindings"} {
+		srv, c, _ := made(t)
+		srv.Fail("GET "+kind, 500)
+		if _, err := c.Observe(ctx, names, claim); !errors.Is(err, eventgrid.ErrAPI) {
+			t.Errorf("GET %s: %v", kind, err)
+		}
+		srv.Fail("GET "+kind, 0)
+		srv.Fail("PUT "+kind, 500)
+		if err := c.Apply(ctx, names, claim, spec, eventgrid.State{}); !errors.Is(err, eventgrid.ErrAPI) {
+			t.Errorf("PUT %s: %v", kind, err)
+		}
+	}
+	srv, c, _ := made(t)
+	st, _ := c.Observe(ctx, names, claim)
+	srv.Fail("DELETE permissionBindings", 500)
+	if err := c.Apply(ctx, names, claim, eventgrid.Spec{SubTopics: spec.SubTopics}, st); !errors.Is(err, eventgrid.ErrAPI) {
+		t.Errorf("DELETE binding: %v", err)
+	}
+	srv.Fail("DELETE permissionBindings", 0)
+	srv.Fail("DELETE topicSpaces", 500)
+	if err := c.Apply(ctx, names, claim, eventgrid.Spec{SubTopics: spec.SubTopics}, st); !errors.Is(err, eventgrid.ErrAPI) {
+		t.Errorf("DELETE space: %v", err)
+	}
+}
