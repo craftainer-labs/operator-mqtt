@@ -185,7 +185,7 @@ func (e *iotExternal) cleanup(ctx context.Context, c *iotcore.Client, policy, ce
 	defer cancel()
 	err := c.Retire(ctx, policy, certARN)
 	if err != nil {
-		log.FromContext(ctx).Error(err, "cannot end a certificate a failed step made", "policy", e.name)
+		log.FromContext(ctx).Error(err, "cannot end a certificate a failed step made", "policy", e.name, "certificate", certARN)
 	}
 	return err
 }
