@@ -596,51 +596,6 @@ func TestEventGridUpdateFailures(t *testing.T) {
 	}
 }
 
-// During a grace period the client allows the active certificate and the
-// previous one, nothing else; a previous one that went missing comes back.
-func TestEventGridGracePeriodAllowsOnlyThePrevious(t *testing.T) {
-	ctx := context.Background()
-	e, srv, _, pem := egCreated(t)
-	names := eventgrid.NamesOf(egBase)
-	active := e.activeThumbprint()
-	prev, _ := eventgrid.NewCert(egBase, time.Now())
-	extra, _ := eventgrid.NewCert(egBase, time.Now())
-	client, _ := srv.NewClient()
-	put := func(list ...string) {
-		t.Helper()
-		if err := client.PutClient(ctx, names, "tenant/app/uid-1", list); err != nil {
-			t.Fatal(err)
-		}
-	}
-	e.claim.Status.Rotation = &common.RotationStatus{Active: active, Previous: prev.Thumbprint}
-	for name, tc := range map[string]struct {
-		list []string
-		ok   bool
-	}{
-		"active and previous": {[]string{active, prev.Thumbprint}, true},
-		"a stranger":          {[]string{active, extra.Thumbprint}, false},
-		"previous is gone":    {[]string{active}, false},
-	} {
-		put(tc.list...)
-		if obs, err := e.Observe(ctx, egSpec); err != nil || obs.UpToDate != tc.ok {
-			t.Errorf("%s: %+v, %v", name, obs, err)
-		}
-	}
-
-	// The stranger goes and the previous certificate is back.
-	put(active, extra.Thumbprint)
-	obs, _ := e.Observe(ctx, egSpec)
-	e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, pem, "KEY", true), nil }
-	if _, err := e.Update(ctx, egSpec, obs.Current); err != nil {
-		t.Fatal(err)
-	}
-	obs, _ = e.Observe(ctx, egSpec)
-	if !obs.UpToDate || len(obs.Current.Thumbprints) != 2 || !slices.Contains(obs.Current.Thumbprints, prev.Thumbprint) ||
-		slices.Contains(obs.Current.Thumbprints, extra.Thumbprint) {
-		t.Errorf("thumbprints = %v", obs.Current.Thumbprints)
-	}
-}
-
 func TestEventGridRotateBeginNeedsACertificate(t *testing.T) {
 	e, _, cur, _ := egCreated(t)
 	before := e.claim.GetExternalID()

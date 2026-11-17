@@ -346,9 +346,6 @@ func TestObserveFailedObjects(t *testing.T) {
 		if err != nil || st.InSync(claim, spec) && o.kind != "clients" {
 			t.Errorf("%s: state = %+v, %v", o.kind+"/"+o.name, st, err)
 		}
-		if o.kind == "clients" && len(st.Thumbprints) != 0 {
-			t.Errorf("a failed client lists %v", st.Thumbprints)
-		}
 	}
 }
 

@@ -282,8 +282,7 @@ func (c *Client) Observe(ctx context.Context, n Names, claim string) (State, err
 		if p != nil {
 			v, _ := p.Attributes[ClaimAttr].(string)
 			mine = v == Marker(claim)
-			// A client in a failed state allows nothing, whatever it lists.
-			if a := p.ClientCertificateAuthentication; a != nil && a.ValidationScheme != nil && !failed(string(deref(p.ProvisioningState))) &&
+			if a := p.ClientCertificateAuthentication; a != nil && a.ValidationScheme != nil &&
 				*a.ValidationScheme == armeventgrid.ClientCertificateValidationSchemeThumbprintMatch {
 				for _, t := range a.AllowedThumbprints {
 					st.Thumbprints = append(st.Thumbprints, NormalizeThumbprint(str(t)))
