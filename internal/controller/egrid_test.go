@@ -415,9 +415,11 @@ func TestEventGridRotate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := e.activeThumbprint()
-	if next == old || string(gen) != next || eventgrid.PEMThumbprint(string(data[keyCertificate])) != next || string(data[keyCertificate]) == pem {
-		t.Fatalf("begin: gen %q, active %q, old %q", gen, next, old)
+	// The claim records nothing until the lifecycle has written the Secret and
+	// the status: externalId still names the old certificate.
+	next := string(gen)
+	if next == old || e.activeThumbprint() != old || eventgrid.PEMThumbprint(string(data[keyCertificate])) != next || string(data[keyCertificate]) == pem {
+		t.Fatalf("begin: gen %q, active %q, old %q", gen, e.activeThumbprint(), old)
 	}
 	// Both are allowed during the grace period, never more than two.
 	obs, _ := e.Observe(ctx, egSpec)
@@ -426,15 +428,20 @@ func TestEventGridRotate(t *testing.T) {
 	}
 	// A retry makes another certificate and replaces the list, so the one the
 	// failed attempt added does not stay.
-	e.claim.SetExternalID(old) // the claim never recorded the first attempt
-	if _, gen2, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{}); err != nil || gen2 == gen {
+	_, gen2, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{})
+	if err != nil || gen2 == gen {
 		t.Fatalf("retry: %q, %v", gen2, err)
 	}
 	obs, _ = e.Observe(ctx, egSpec)
 	if len(obs.Current.Thumbprints) != 2 || slices.Contains(obs.Current.Thumbprints, next) || !slices.Contains(obs.Current.Thumbprints, old) {
 		t.Errorf("after the retry: %v", obs.Current.Thumbprints)
 	}
-	active := e.activeThumbprint()
+	// The lifecycle records the generation; externalId follows it.
+	active := string(gen2)
+	e.claim.Status.Rotation = &common.RotationStatus{Active: active, Previous: old}
+	if obs, _ = e.Observe(ctx, egSpec); e.claim.GetExternalID() != active || !obs.UpToDate {
+		t.Errorf("externalId = %q, up to date %v", e.claim.GetExternalID(), obs.UpToDate)
+	}
 	if err := e.RotateFinish(ctx, egSpec, obs.Current, lifecycle.RotationState{Active: lifecycle.Generation(active)}); err != nil {
 		t.Fatal(err)
 	}
@@ -757,10 +764,10 @@ func TestEventGridUserLifecycleAndRotation(t *testing.T) {
 	h.patch(u, func() { u.Annotations = map[string]string{lifecycle.AnnotationRotate: "1"} })
 	h.reconcileOK(r, u)
 	h.get(u)
-	second := u.Status.ExternalID
-	if second == first || u.Status.Rotation == nil || u.Status.Rotation.Active != second || len(thumbprints()) != 2 {
-		t.Fatalf("rotation = %+v, externalId = %q, thumbprints = %v", u.Status.Rotation, second, thumbprints())
+	if u.Status.Rotation == nil || u.Status.Rotation.Active == first || len(thumbprints()) != 2 {
+		t.Fatalf("rotation = %+v, thumbprints = %v", u.Status.Rotation, thumbprints())
 	}
+	second := u.Status.Rotation.Active
 	if got := h.bindingSecret(u); eventgrid.PEMThumbprint(got[keyCertificate]) != second {
 		t.Errorf("the binding does not hold the new certificate: %v", got)
 	}
@@ -782,5 +789,119 @@ func TestEventGridUserLifecycleAndRotation(t *testing.T) {
 	h.reconcileOK(r, u)
 	if !h.gone(u) || len(fake.Names("clients"))+len(fake.Names("clientGroups"))+len(fake.Names("topicSpaces"))+len(fake.Names("permissionBindings")) != 0 {
 		t.Errorf("gone = %t, clients = %v", h.gone(u), fake.Names("clients"))
+	}
+}
+
+// A first rotation whose Secret write failed after the client got the new
+// thumbprint: nothing was recorded, so the claim still names the old
+// certificate, the Secret still holds it, and neither is lost.
+func TestEventGridFirstRotationWhoseSecretWriteFailed(t *testing.T) {
+	ctx := context.Background()
+	e, srv, _, pem := egCreated(t)
+	old := e.activeThumbprint()
+	obs, _ := e.Observe(ctx, egSpec)
+	if _, _, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{}); err != nil {
+		t.Fatal(err)
+	}
+	if e.activeThumbprint() != old {
+		t.Fatalf("the new thumbprint was recorded: %q", e.activeThumbprint())
+	}
+	e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, pem, "KEY", true), nil }
+	e.drop = func(context.Context, *corev1.Secret) error { t.Error("the Secret was dropped"); return nil }
+	obs, err := e.Observe(ctx, egSpec)
+	if err != nil || len(obs.Current.Thumbprints) != 2 {
+		t.Fatalf("observe: %+v, %v", obs, err)
+	}
+	data, err := e.Update(ctx, egSpec, obs.Current)
+	if err != nil || string(data[keyCertificate]) != pem {
+		t.Fatalf("update: %v, %v", data.Keys(), err)
+	}
+	// The old certificate, the one the Secret holds, is on the client. The new
+	// one never reached a Secret, so nothing can use it and it may go.
+	if cl, _ := srv.NewClient(); cl != nil {
+		st, _ := cl.Observe(ctx, eventgrid.NamesOf(egBase), "tenant/app/uid-1")
+		if !slices.Contains(st.Thumbprints, old) || len(st.Thumbprints) > 2 {
+			t.Errorf("thumbprints = %v", st.Thumbprints)
+		}
+	}
+}
+
+// A first rotation whose Secret write succeeded and whose status patch failed:
+// the Secret holds the new certificate, the claim names the old one, and both
+// stay on the client until the lifecycle adopts the rotation.
+func TestEventGridFirstRotationWhoseStatusWriteFailed(t *testing.T) {
+	ctx := context.Background()
+	e, srv, _, _ := egCreated(t)
+	old := e.activeThumbprint()
+	obs, _ := e.Observe(ctx, egSpec)
+	data, gen, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := string(gen)
+	newPEM, newKey := string(data[keyCertificate]), string(data[keyPrivateKey])
+	e.binding = func(context.Context) (*corev1.Secret, error) { return egSecret(e, newPEM, newKey, true), nil }
+	e.drop = func(context.Context, *corev1.Secret) error { t.Error("the Secret was dropped"); return nil }
+	srv.Reset()
+	for i := range 2 {
+		obs, err = e.Observe(ctx, egSpec)
+		if err != nil || !slices.Equal(obs.Current.Thumbprints, []string{old, next}) {
+			t.Fatalf("observe %d: %v, %v", i, obs.Current.Thumbprints, err)
+		}
+		got, err := e.Update(ctx, egSpec, obs.Current)
+		if err != nil || string(got[keyCertificate]) != newPEM || string(got[keyPrivateKey]) != newKey {
+			t.Fatalf("update %d: %v, %v", i, got.Keys(), err)
+		}
+	}
+	for _, c := range srv.Calls() {
+		if strings.HasPrefix(c, "PUT clients") {
+			t.Errorf("the client was written: %s", c)
+		}
+	}
+	// The lifecycle adopts the rotation: the Secret's certificate is active, the
+	// old one is in its grace period, and the finish leaves only the new one.
+	e.claim.Status.Rotation = &common.RotationStatus{Active: next, RetireAfter: &metav1.Time{Time: time.Now()}}
+	if obs, _ = e.Observe(ctx, egSpec); !obs.UpToDate {
+		t.Errorf("after the adoption: %+v", obs)
+	}
+	if err := e.RotateFinish(ctx, egSpec, obs.Current, lifecycle.RotationState{Active: lifecycle.Generation(next)}); err != nil {
+		t.Fatal(err)
+	}
+	if obs, _ = e.Observe(ctx, egSpec); !slices.Equal(obs.Current.Thumbprints, []string{next}) {
+		t.Errorf("after the finish: %v", obs.Current.Thumbprints)
+	}
+}
+
+// A client that somehow lists a third thumbprint is cut back to the active
+// certificate and the one the unrecorded rotation's Secret holds.
+func TestEventGridUnrecordedRotationWithAStranger(t *testing.T) {
+	ctx := context.Background()
+	e, srv, _, _ := egCreated(t)
+	old := e.activeThumbprint()
+	obs, _ := e.Observe(ctx, egSpec)
+	data, gen, err := e.RotateBegin(ctx, egSpec, obs.Current, lifecycle.RotationState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger, _ := eventgrid.NewCert(egBase, time.Now())
+	srv.Seed("clients", egBase, map[string]any{
+		"attributes": map[string]any{eventgrid.ClaimAttr: eventgrid.Marker("tenant/app/uid-1")},
+		"clientCertificateAuthentication": map[string]any{
+			"validationScheme": "ThumbprintMatch", "allowedThumbprints": []any{old, string(gen), stranger.Thumbprint},
+		},
+	})
+	e.binding = func(context.Context) (*corev1.Secret, error) {
+		return egSecret(e, string(data[keyCertificate]), string(data[keyPrivateKey]), true), nil
+	}
+	obs, err = e.Observe(ctx, egSpec)
+	if err != nil || len(obs.Current.Thumbprints) != 3 {
+		t.Fatalf("observe: %v, %v", obs.Current.Thumbprints, err)
+	}
+	if _, err := e.Update(ctx, egSpec, obs.Current); err != nil {
+		t.Fatal(err)
+	}
+	obs, _ = e.Observe(ctx, egSpec)
+	if len(obs.Current.Thumbprints) != 2 || !slices.Contains(obs.Current.Thumbprints, old) || !slices.Contains(obs.Current.Thumbprints, string(gen)) {
+		t.Errorf("thumbprints = %v", obs.Current.Thumbprints)
 	}
 }

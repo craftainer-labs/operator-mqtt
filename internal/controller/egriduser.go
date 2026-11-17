@@ -167,6 +167,12 @@ func (e *egExternal) observe(ctx context.Context, spec mqttv1alpha1.MqttUserSpec
 	// Reconcile adds the finalizer with a patch that replaces the claim with the
 	// server's copy, which loses a name set before it; set it again here.
 	e.claim.SetExternalName(e.name)
+	// The thumbprint of a rotation is recorded as the active generation by the
+	// lifecycle, once the binding Secret and the status hold it; externalId
+	// follows that, never runs ahead of it.
+	if a := e.claim.GetRotationStatus().Active; isThumbprint(a) {
+		e.claim.SetExternalID(a)
+	}
 	if e.pre != nil {
 		return none, e.pre
 	}
@@ -278,9 +284,25 @@ func (e *egExternal) update(ctx context.Context, spec mqttv1alpha1.MqttUserSpec,
 		// back: the Secret is dropped and the lifecycle rotates.
 		return nil, e.unusable(ctx, s)
 	}
-	if !e.thumbprintsOK(cur) {
+	// held is the thumbprint of the certificate the binding Secret holds. When a
+	// first rotation's status was never recorded (its Secret write or status
+	// patch failed after RotateBegin) the claim still names the old certificate
+	// while a Secret of this claim already holds the new one, and both are on
+	// the client: neither goes, and the Secret stays, until the lifecycle adopts
+	// the rotation.
+	held, heldKey := "", ""
+	if s != nil {
+		held, heldKey = eventgrid.PEMThumbprint(string(s.Data[keyCertificate])), string(s.Data[keyPrivateKey])
+	}
+	unrecorded := heldKey != "" && held != active && e.claim.GetRotationStatus().Active == "" &&
+		slices.Contains(cur.Thumbprints, held) && metav1.IsControlledBy(s, e.claim)
+	if !e.thumbprintsOK(cur) && !(unrecorded && len(cur.Thumbprints) <= 2) {
 		// A thumbprint that is neither active nor in a grace period goes.
-		if err := c.PutClient(ctx, e.names, e.id, []string{active}); err != nil {
+		keep := []string{active}
+		if unrecorded {
+			keep = append(keep, held)
+		}
+		if err := c.PutClient(ctx, e.names, e.id, keep); err != nil {
 			return nil, err
 		}
 	}
@@ -289,10 +311,8 @@ func (e *egExternal) update(ctx context.Context, spec mqttv1alpha1.MqttUserSpec,
 			return nil, err
 		}
 	}
-	if s != nil && len(s.Data[keyPrivateKey]) > 0 {
-		if held := string(s.Data[keyCertificate]); eventgrid.PEMThumbprint(held) == active {
-			return e.data(held, string(s.Data[keyPrivateKey])), nil
-		}
+	if heldKey != "" && (held == active || unrecorded) {
+		return e.data(string(s.Data[keyCertificate]), heldKey), nil
 	}
 	return nil, e.unusable(ctx, s)
 }
@@ -348,7 +368,6 @@ func (e *egExternal) begin(ctx context.Context, cur eventgrid.State) (binding.Da
 	if err := c.PutClient(ctx, e.names, e.id, list); err != nil {
 		return nil, "", err
 	}
-	e.claim.SetExternalID(cert.Thumbprint)
 	return e.data(cert.PEM, cert.Key()), lifecycle.Generation(cert.Thumbprint), nil
 }
 
